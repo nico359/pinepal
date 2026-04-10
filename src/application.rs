@@ -107,17 +107,17 @@ impl PinepalApplication {
         let about = adw::AboutDialog::builder()
             .application_name("PinePal")
             .application_icon("io.github.nico359.pinepal")
-            .developer_name("deck")
+            .developer_name("nico359")
             .version(VERSION)
-            .developers(vec!["deck"])
-            .comments(&gettext("Companion app for PineTime smartwatches running InfiniTime"))
+            .developers(vec!["nico359", "GitHub Copilot CLI (Claude)"])
+            .comments("Companion app for PineTime smartwatches running InfiniTime.\n\nBuilt with the assistance of AI (GitHub Copilot CLI, powered by Claude).")
             .website("https://github.com/nico359/pinepal")
+            .issue_url("https://github.com/nico359/pinepal/issues")
             .license_type(gtk::License::Gpl30)
             .translator_credits(&gettext("translator-credits"))
-            .copyright("© 2026 deck")
+            .copyright("© 2026 nico359")
             .build();
 
-        // Credit watchmate as upstream inspiration
         about.add_credit_section(
             Some(&gettext("Based on")),
             &["Watchmate by Andrii Zymohliad https://github.com/azymohliad/watchmate"],
