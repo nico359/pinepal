@@ -88,7 +88,7 @@
                   </object>
                 </child>
 
-                <!-- Notification forwarding toggle -->
+                <!-- Settings -->
                 <child>
                   <object class="AdwPreferencesGroup">
                     <property name="title" translatable="yes">Settings</property>
@@ -96,6 +96,12 @@
                       <object class="AdwSwitchRow" id="notif_switch">
                         <property name="title" translatable="yes">Forward Notifications</property>
                         <property name="subtitle" translatable="yes">Send desktop notifications to watch</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="AdwSwitchRow" id="background_switch">
+                        <property name="title" translatable="yes">Run in Background</property>
+                        <property name="subtitle" translatable="yes">Keep connected when window is closed</property>
                       </object>
                     </child>
                   </object>

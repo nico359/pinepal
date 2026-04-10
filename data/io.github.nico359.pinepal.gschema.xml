@@ -11,5 +11,10 @@
 			<summary>Forward notifications</summary>
 			<description>Whether to forward desktop notifications to the connected watch.</description>
 		</key>
+		<key name="run-in-background" type="b">
+			<default>true</default>
+			<summary>Run in background</summary>
+			<description>Keep the app running and connected when the window is closed.</description>
+		</key>
 	</schema>
 </schemalist>

@@ -65,7 +65,9 @@ mod imp {
     impl ObjectImpl for PinepalWindow {
         fn constructed(&self) {
             self.parent_constructed();
-            self.obj().setup_back_button();
+            let obj = self.obj();
+            obj.setup_back_button();
+            obj.setup_background_mode();
         }
     }
     impl WidgetImpl for PinepalWindow {}
@@ -229,6 +231,15 @@ impl PinepalWindow {
             if let Some(ref ble) = *window.imp().ble_handle.borrow() {
                 ble.send(BleCommand::Disconnect);
             }
+        });
+    }
+
+    fn setup_background_mode(&self) {
+        let settings = gio::Settings::new("io.github.nico359.pinepal");
+        self.set_hide_on_close(settings.boolean("run-in-background"));
+        let window = self.clone();
+        settings.connect_changed(Some("run-in-background"), move |s, _| {
+            window.set_hide_on_close(s.boolean("run-in-background"));
         });
     }
 }

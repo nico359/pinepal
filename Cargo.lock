@@ -1420,6 +1420,7 @@ dependencies = [
  "libadwaita",
  "log",
  "rusqlite",
+ "serde",
  "tokio",
  "uuid",
  "zbus",
