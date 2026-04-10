@@ -24,8 +24,8 @@
             "--share=network"
         ],
         "env" : {
-            "RUST_BACKTRACE" : "1",
-            "RUST_LOG" : "pinepal=debug"
+            "CARGO_HOME" : "/run/build/pinepal/cargo",
+            "RUST_BACKTRACE" : "1"
         }
     },
     "cleanup" : [
@@ -44,6 +44,7 @@
             "name" : "pinepal",
             "builddir" : true,
             "buildsystem" : "meson",
+            "config-opts" : ["-Dbuildtype=release"],
             "sources" : [
                 {
                     "type" : "dir",
