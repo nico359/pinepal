@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist gettext-domain="pinepal">
 	<schema id="io.github.nico359.pinepal" path="/io/github/nico359/pinepal/">
+		<key name="auto-connect-address" type="s">
+			<default>''</default>
+			<summary>Last connected device address</summary>
+			<description>Bluetooth address of the last connected InfiniTime device for automatic reconnection.</description>
+		</key>
+		<key name="forward-notifications" type="b">
+			<default>true</default>
+			<summary>Forward notifications</summary>
+			<description>Whether to forward desktop notifications to the connected watch.</description>
+		</key>
 	</schema>
 </schemalist>

@@ -6,6 +6,16 @@ edition = "2021"
 [dependencies]
 gettext-rs = { version = "0.7", features = ["gettext-system"] }
 gtk = { version = "0.9", package = "gtk4", features = ["gnome_47"] }
+bluer = { version = "0.17", features = ["bluetoothd"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+futures = "0.3"
+rusqlite = { version = "0.34", features = ["bundled"] }
+chrono = "0.4"
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"
+uuid = "1"
+zbus = "5"
 
 [dependencies.adw]
 package = "libadwaita"

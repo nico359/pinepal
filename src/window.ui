@@ -4,12 +4,19 @@
   <requires lib="Adw" version="1.0"/>
   <template class="PinepalWindow" parent="AdwApplicationWindow">
     <property name="title" translatable="yes">PinePal</property>
-    <property name="default-width">800</property>
-    <property name="default-height">600</property>
+    <property name="default-width">420</property>
+    <property name="default-height">700</property>
     <property name="content">
       <object class="AdwToolbarView">
         <child type="top">
-          <object class="AdwHeaderBar">
+          <object class="AdwHeaderBar" id="header_bar">
+            <child type="start">
+              <object class="GtkButton" id="back_button">
+                <property name="icon-name">go-previous-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Back to devices</property>
+                <property name="visible">false</property>
+              </object>
+            </child>
             <child type="end">
               <object class="GtkMenuButton">
                 <property name="primary">True</property>
@@ -21,11 +28,16 @@
           </object>
         </child>
         <property name="content">
-          <object class="GtkLabel" id="label">
-            <property name="label" translatable="yes">Hello, World!</property>
-            <style>
-              <class name="title-1"/>
-            </style>
+          <object class="AdwNavigationView" id="navigation_view">
+            <child>
+              <object class="AdwNavigationPage" id="devices_nav_page">
+                <property name="title" translatable="yes">Devices</property>
+                <property name="tag">devices</property>
+                <property name="child">
+                  <object class="PinepalDevicesPage" id="devices_page"/>
+                </property>
+              </object>
+            </child>
           </object>
         </property>
       </object>
@@ -33,14 +45,6 @@
   </template>
   <menu id="primary_menu">
     <section>
-      <item>
-        <attribute name="label" translatable="yes">_Preferences</attribute>
-        <attribute name="action">app.preferences</attribute>
-      </item>
-      <item>
-        <attribute name="label" translatable="yes">_Keyboard Shortcuts</attribute>
-        <attribute name="action">app.shortcuts</attribute>
-      </item>
       <item>
         <attribute name="label" translatable="yes">_About PinePal</attribute>
         <attribute name="action">app.about</attribute>

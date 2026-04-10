@@ -1,6 +1,8 @@
 # List of source files containing translatable strings.
 # Please keep this file sorted alphabetically.
 data/io.github.nico359.pinepal.desktop.in
-data/io.github.nico359.pinepal.metainfo.xml.in
 data/io.github.nico359.pinepal.gschema.xml
+data/io.github.nico359.pinepal.metainfo.xml.in
+src/dashboard_page.ui
+src/devices_page.ui
 src/window.ui

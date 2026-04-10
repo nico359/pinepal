@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="Adw" version="1.0"/>
+  <template class="PinepalDashboardPage" parent="GtkBox">
+    <property name="orientation">vertical</property>
+    <property name="spacing">0</property>
+
+    <child>
+      <object class="GtkScrolledWindow">
+        <property name="vexpand">true</property>
+        <property name="hscrollbar-policy">never</property>
+        <property name="child">
+          <object class="AdwClamp">
+            <property name="maximum-size">500</property>
+            <property name="margin-start">16</property>
+            <property name="margin-end">16</property>
+            <property name="margin-top">16</property>
+            <property name="margin-bottom">16</property>
+            <property name="child">
+              <object class="GtkBox">
+                <property name="orientation">vertical</property>
+                <property name="spacing">16</property>
+
+                <!-- Device info row -->
+                <child>
+                  <object class="AdwPreferencesGroup">
+                    <child>
+                      <object class="AdwActionRow" id="firmware_row">
+                        <property name="title" translatable="yes">Firmware</property>
+                        <property name="subtitle">—</property>
+                        <child type="prefix">
+                          <object class="GtkImage">
+                            <property name="icon-name">system-software-update-symbolic</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+
+                <!-- Live stats -->
+                <child>
+                  <object class="AdwPreferencesGroup">
+                    <property name="title" translatable="yes">Live Stats</property>
+                    <child>
+                      <object class="AdwActionRow" id="battery_row">
+                        <property name="title" translatable="yes">Battery</property>
+                        <property name="subtitle">—</property>
+                        <child type="prefix">
+                          <object class="GtkImage">
+                            <property name="icon-name">battery-symbolic</property>
+                          </object>
+                        </child>
+                        <child type="suffix">
+                          <object class="GtkLevelBar" id="battery_level">
+                            <property name="min-value">0</property>
+                            <property name="max-value">100</property>
+                            <property name="value">0</property>
+                            <property name="width-request">100</property>
+                            <property name="valign">center</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="AdwActionRow" id="heart_rate_row">
+                        <property name="title" translatable="yes">Heart Rate</property>
+                        <property name="subtitle">—</property>
+                        <child type="prefix">
+                          <object class="GtkImage">
+                            <property name="icon-name">heart-filled-symbolic</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="AdwActionRow" id="steps_row">
+                        <property name="title" translatable="yes">Steps</property>
+                        <property name="subtitle">—</property>
+                        <child type="prefix">
+                          <object class="GtkImage">
+                            <property name="icon-name">shoe-symbolic</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+
+                <!-- Notification forwarding toggle -->
+                <child>
+                  <object class="AdwPreferencesGroup">
+                    <property name="title" translatable="yes">Settings</property>
+                    <child>
+                      <object class="AdwSwitchRow" id="notif_switch">
+                        <property name="title" translatable="yes">Forward Notifications</property>
+                        <property name="subtitle" translatable="yes">Send desktop notifications to watch</property>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+
+                <!-- Step history chart -->
+                <child>
+                  <object class="AdwPreferencesGroup">
+                    <property name="title" translatable="yes">Step History</property>
+                    <child>
+                      <object class="GtkBox">
+                        <property name="orientation">vertical</property>
+                        <property name="spacing">8</property>
+                        <child>
+                          <object class="GtkBox" id="range_box">
+                            <property name="halign">center</property>
+                            <property name="spacing">4</property>
+                            <property name="css-classes">linked</property>
+                            <child>
+                              <object class="GtkToggleButton" id="range_7d">
+                                <property name="label" translatable="yes">7 Days</property>
+                                <property name="active">true</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkToggleButton" id="range_30d">
+                                <property name="label" translatable="yes">30 Days</property>
+                              </object>
+                            </child>
+                            <child>
+                              <object class="GtkToggleButton" id="range_all">
+                                <property name="label" translatable="yes">All Time</property>
+                              </object>
+                            </child>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkFrame">
+                            <property name="child">
+                              <object class="GtkDrawingArea" id="step_chart">
+                                <property name="height-request">200</property>
+                                <property name="content-width">380</property>
+                                <property name="content-height">200</property>
+                              </object>
+                            </property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+
+                <!-- Disconnect button -->
+                <child>
+                  <object class="GtkButton" id="disconnect_button">
+                    <property name="label" translatable="yes">Disconnect</property>
+                    <property name="halign">center</property>
+                    <property name="css-classes">destructive-action</property>
+                    <property name="css-classes">pill</property>
+                  </object>
+                </child>
+
+              </object>
+            </property>
+          </object>
+        </property>
+      </object>
+    </child>
+  </template>
+</interface>

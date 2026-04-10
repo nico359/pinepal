@@ -1,36 +1,25 @@
-/* application.rs
- *
- * Copyright 2026 deck
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- *
- * SPDX-License-Identifier: GPL-3.0-or-later
- */
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 use gettextrs::gettext;
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use gtk::{gio, glib};
+use std::cell::OnceCell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::ble_manager;
 use crate::config::VERSION;
+use crate::notifications;
 use crate::PinepalWindow;
 
 mod imp {
     use super::*;
 
     #[derive(Debug, Default)]
-    pub struct PinepalApplication {}
+    pub struct PinepalApplication {
+        pub tokio_rt: OnceCell<tokio::runtime::Runtime>,
+    }
 
     #[glib::object_subclass]
     impl ObjectSubclass for PinepalApplication {
@@ -49,20 +38,38 @@ mod imp {
     }
 
     impl ApplicationImpl for PinepalApplication {
-        // We connect to the activate callback to create a window when the application
-        // has been launched. Additionally, this callback notifies us when the user
-        // tries to launch a "second instance" of the application. When they try
-        // to do that, we'll just present any existing window.
         fn activate(&self) {
             let application = self.obj();
-            // Get the current window or create one if necessary
             let window = application.active_window().unwrap_or_else(|| {
+                let rt = self.tokio_rt.get_or_init(|| {
+                    tokio::runtime::Builder::new_multi_thread()
+                        .enable_all()
+                        .build()
+                        .expect("Failed to create tokio runtime")
+                });
+
+                let (ble_handle, event_rx) = ble_manager::spawn(rt);
+
+                // Notification forwarding: bridge GSettings to an AtomicBool
+                let settings = gio::Settings::new("io.github.nico359.pinepal");
+                let notif_enabled = Arc::new(AtomicBool::new(settings.boolean("forward-notifications")));
+                let notif_flag = notif_enabled.clone();
+                settings.connect_changed(Some("forward-notifications"), move |s, _| {
+                    notif_flag.store(s.boolean("forward-notifications"), Ordering::Relaxed);
+                });
+                notifications::spawn_notification_forwarder(rt, ble_handle.clone(), notif_enabled);
+
                 let window = PinepalWindow::new(&*application);
+                window.init_ble(ble_handle, event_rx);
                 window.upcast()
             });
 
-            // Ask the window manager/compositor to present the window
             window.present();
+        }
+
+        fn shutdown(&self) {
+            // Tokio runtime drops automatically
+            self.parent_shutdown();
         }
     }
 
@@ -103,10 +110,18 @@ impl PinepalApplication {
             .developer_name("deck")
             .version(VERSION)
             .developers(vec!["deck"])
-            // Translators: Replace "translator-credits" with your name/username, and optionally an email or URL.
+            .comments(&gettext("Companion app for PineTime smartwatches running InfiniTime"))
+            .website("https://github.com/nico359/pinepal")
+            .license_type(gtk::License::Gpl30)
             .translator_credits(&gettext("translator-credits"))
             .copyright("© 2026 deck")
             .build();
+
+        // Credit watchmate as upstream inspiration
+        about.add_credit_section(
+            Some(&gettext("Based on")),
+            &["Watchmate by Andrii Zymohliad https://github.com/azymohliad/watchmate"],
+        );
 
         about.present(Some(&window));
     }

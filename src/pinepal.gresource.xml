@@ -2,6 +2,8 @@
 <gresources>
   <gresource prefix="/io/github/nico359/pinepal">
     <file preprocess="xml-stripblanks">window.ui</file>
+    <file preprocess="xml-stripblanks">devices_page.ui</file>
+    <file preprocess="xml-stripblanks">dashboard_page.ui</file>
     <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
   </gresource>
 </gresources>

@@ -12,7 +12,11 @@
         "--share=ipc",
         "--socket=fallback-x11",
         "--device=dri",
-        "--socket=wayland"
+        "--socket=wayland",
+        "--allow=bluetooth",
+        "--socket=session-bus",
+        "--system-talk-name=org.bluez",
+        "--talk-name=org.freedesktop.Notifications"
     ],
     "build-options" : {
         "append-path" : "/usr/lib/sdk/rust-stable/bin",
@@ -42,8 +46,8 @@
             "buildsystem" : "meson",
             "sources" : [
                 {
-                    "type" : "git",
-                    "url" : "file:///home/deck/Projects"
+                    "type" : "dir",
+                    "path" : "."
                 }
             ]
         }
