@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=PinePal
+Exec=pinepal
+Icon=io.github.nico359.pinepal
+Terminal=false
+Type=Application
+Categories=Utility;
+Keywords=GTK;
+StartupNotify=true
+DBusActivatable=true
