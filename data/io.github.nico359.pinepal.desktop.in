@@ -1,10 +1,11 @@
 [Desktop Entry]
 Name=PinePal
+Comment=Companion app for PineTime smartwatches
 Exec=pinepal
 Icon=io.github.nico359.pinepal
 Terminal=false
 Type=Application
-Categories=Utility;
-Keywords=GTK;
+Categories=Utility;Monitor;
+Keywords=PineTime;InfiniTime;Smartwatch;BLE;Bluetooth;Watch;Fitness;Steps;
 StartupNotify=true
 DBusActivatable=true
