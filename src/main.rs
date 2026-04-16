@@ -5,6 +5,8 @@ mod ble_manager;
 mod config;
 mod dashboard_page;
 mod devices_page;
+mod log_collector;
+mod log_viewer;
 mod notifications;
 mod step_chart;
 mod step_db;
@@ -19,7 +21,7 @@ use gtk::{gio, glib};
 use gtk::prelude::*;
 
 fn main() -> glib::ExitCode {
-    env_logger::init();
+    log_collector::init();
 
     bindtextdomain(GETTEXT_PACKAGE, LOCALEDIR).expect("Unable to bind the text domain");
     bind_textdomain_codeset(GETTEXT_PACKAGE, "UTF-8")

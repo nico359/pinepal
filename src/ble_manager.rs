@@ -2,7 +2,7 @@
 // BLE connection manager for InfiniTime watches.
 // Handles discovery, connection, characteristic I/O, and reconnection with backoff.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use bluer::{Adapter, Address, Device};
 use futures::StreamExt;
 use std::collections::HashMap;
@@ -86,20 +86,38 @@ pub fn spawn(rt: &tokio::runtime::Runtime) -> (BleHandle, mpsc::Receiver<BleEven
 
 /// Main BLE task — runs on tokio, manages state machine.
 async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>) {
+    log::info!("BLE task started");
+
     let session = match bluer::Session::new().await {
         Ok(s) => s,
         Err(e) => {
+            log::error!("Bluetooth session init failed: {e}");
             let _ = tx.send(BleEvent::Error(format!("Bluetooth init failed: {e}"))).await;
             return;
         }
     };
     let adapter = match session.default_adapter().await {
-        Ok(a) => a,
+        Ok(a) => {
+            log::info!(
+                "Using Bluetooth adapter: {} (addr {})",
+                a.name(),
+                a.address().await.unwrap_or_default()
+            );
+            a
+        }
         Err(e) => {
+            log::error!("No Bluetooth adapter available: {e}");
             let _ = tx.send(BleEvent::Error(format!("No Bluetooth adapter: {e}"))).await;
             return;
         }
     };
+
+    // Log adapter powered state upfront — useful on Halium where BT may not be ready.
+    match adapter.is_powered().await {
+        Ok(true) => log::info!("Adapter is powered on"),
+        Ok(false) => log::warn!("Adapter is powered OFF — BLE operations will fail"),
+        Err(e) => log::warn!("Could not check adapter power state: {e}"),
+    }
 
     let mut auto_addr: Option<Address> = None;
     let mut attempts: u32 = 0;
@@ -110,21 +128,29 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
         if let (Some(addr), false) = (auto_addr, user_disconnected) {
             if attempts > 0 {
                 let delay = reconnect_delay(attempts);
+                log::info!("Reconnect attempt {attempts} — waiting {delay}s before retrying {addr}");
                 let _ = tx.send(BleEvent::Reconnecting { attempt: attempts, delay_secs: delay }).await;
                 // Wait for delay OR a user command
                 tokio::select! {
-                    _ = sleep(Duration::from_secs(delay)) => {}
+                    _ = sleep(Duration::from_secs(delay)) => {
+                        log::debug!("Reconnect backoff elapsed, proceeding");
+                    }
                     Some(cmd) = rx.recv() => {
                         match cmd {
                             BleCommand::Disconnect => {
+                                log::info!("User cancelled reconnect");
                                 auto_addr = None;
                                 user_disconnected = true;
                                 attempts = 0;
                                 let _ = tx.send(BleEvent::Disconnected { reason: "User cancelled".into() }).await;
                                 continue;
                             }
-                            BleCommand::Shutdown => return,
+                            BleCommand::Shutdown => {
+                                log::info!("BLE task shutting down during reconnect wait");
+                                return;
+                            }
                             BleCommand::Connect(new_addr) => {
+                                log::info!("User requested new device {new_addr} during reconnect wait");
                                 auto_addr = Some(new_addr);
                                 attempts = 0;
                                 user_disconnected = false;
@@ -136,20 +162,35 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                 }
             }
 
+            // Check adapter power before each attempt (Halium may toggle BT).
+            match adapter.is_powered().await {
+                Ok(false) => log::warn!("Adapter unpowered before connect attempt {}", attempts + 1),
+                Err(e) => log::warn!("Could not check adapter power: {e}"),
+                _ => {}
+            }
+
+            log::info!("Connecting to {addr} (attempt {})", attempts + 1);
+
             // Attempt connection
             match do_connect(&adapter, addr, &tx, &mut rx).await {
                 Ok(DisconnectReason::UserRequested) => {
+                    log::info!("Disconnected by user request");
                     auto_addr = None;
                     user_disconnected = true;
                     attempts = 0;
                 }
-                Ok(DisconnectReason::Shutdown) => return,
+                Ok(DisconnectReason::Shutdown) => {
+                    log::info!("BLE task shutting down");
+                    return;
+                }
                 Ok(DisconnectReason::NewDevice(new_addr)) => {
+                    log::info!("Switching to new device {new_addr}");
                     auto_addr = Some(new_addr);
                     attempts = 0;
                     user_disconnected = false;
                 }
-                Err(_) => {
+                Err(e) => {
+                    log::warn!("Connection attempt {} failed: {e}", attempts + 1);
                     attempts += 1;
                 }
             }
@@ -157,21 +198,31 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
         }
 
         // Idle — wait for a command
+        log::debug!("BLE task idle, waiting for command");
         match rx.recv().await {
             Some(BleCommand::StartScan) => {
+                log::info!("Starting BLE scan");
                 let _ = tx.send(BleEvent::Scanning).await;
                 if let Err(e) = do_scan(&adapter, &tx).await {
+                    log::error!("Scan error: {e}");
                     let _ = tx.send(BleEvent::Error(format!("Scan error: {e}"))).await;
                 }
             }
             Some(BleCommand::Connect(addr)) => {
+                log::info!("User requested connect to {addr}");
                 auto_addr = Some(addr);
                 attempts = 0;
                 user_disconnected = false;
             }
-            Some(BleCommand::Shutdown) => return,
+            Some(BleCommand::Shutdown) => {
+                log::info!("BLE task received shutdown");
+                return;
+            }
             Some(_) => {}
-            None => return,
+            None => {
+                log::warn!("BLE command channel closed, task exiting");
+                return;
+            }
         }
     }
 }
@@ -189,16 +240,19 @@ enum DisconnectReason {
 }
 
 async fn do_scan(adapter: &Adapter, tx: &mpsc::Sender<BleEvent>) -> Result<()> {
+    log::debug!("Setting LE discovery filter");
     let filter = bluer::DiscoveryFilter {
         transport: bluer::DiscoveryTransport::Le,
         ..Default::default()
     };
     adapter.set_discovery_filter(filter).await?;
 
+    log::info!("Discovery started (10 s window)");
     let discover = adapter.discover_devices().await?;
     tokio::pin!(discover);
 
     let scan_end = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut found = 0u32;
 
     loop {
         let remaining = scan_end.saturating_duration_since(tokio::time::Instant::now());
@@ -209,8 +263,11 @@ async fn do_scan(adapter: &Adapter, tx: &mpsc::Sender<BleEvent>) -> Result<()> {
             Ok(Some(bluer::AdapterEvent::DeviceAdded(addr))) => {
                 if let Ok(device) = adapter.device(addr) {
                     let name = device.name().await.ok().flatten().unwrap_or_default();
+                    log::debug!("Discovered device {addr}: '{name}'");
                     if name == DEVICE_NAME {
                         let rssi = device.rssi().await.ok().flatten();
+                        log::info!("Found InfiniTime at {addr} (RSSI: {rssi:?})");
+                        found += 1;
                         let _ = tx.send(BleEvent::DeviceFound { address: addr, name, rssi }).await;
                     }
                 }
@@ -219,6 +276,7 @@ async fn do_scan(adapter: &Adapter, tx: &mpsc::Sender<BleEvent>) -> Result<()> {
             Ok(None) | Err(_) => break,
         }
     }
+    log::info!("Discovery finished — found {found} InfiniTime device(s)");
     Ok(())
 }
 
@@ -230,14 +288,30 @@ async fn do_connect(
 ) -> Result<DisconnectReason> {
     let device = adapter.device(addr)?;
 
-    // Connect with timeout
-    timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS), device.connect())
-        .await
-        .context("Connection timed out")?
-        .context("Connection failed")?;
+    log::info!("Initiating connection to {addr} (timeout {}s)", CONNECT_TIMEOUT_SECS);
 
+    // Connect with timeout
+    match timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS), device.connect()).await {
+        Err(_) => {
+            log::warn!("Connection to {addr} timed out after {}s", CONNECT_TIMEOUT_SECS);
+            return Err(anyhow!("Connection timed out"));
+        }
+        Ok(Err(e)) => {
+            log::warn!("Connection to {addr} failed: {e}");
+            return Err(anyhow!("Connection failed: {e}"));
+        }
+        Ok(Ok(())) => {
+            log::info!("TCP/ACL link established to {addr}");
+        }
+    }
+
+    log::debug!("Waiting for GATT service resolution on {addr}");
     // Discover characteristics
     let chars = discover_characteristics(&device).await?;
+    log::info!(
+        "Discovered {} GATT characteristics on {addr}",
+        chars.len()
+    );
 
     // Read firmware version
     let firmware = match chars.get(&CHR_FIRMWARE_REV) {
@@ -247,20 +321,26 @@ async fn do_connect(
         }
         None => "Unknown".into(),
     };
+    log::info!("Firmware version: {firmware}");
 
     let _ = tx.send(BleEvent::Connected { address: addr, firmware }).await;
 
     // Initial reads
     if let Some(chr) = chars.get(&CHR_BATTERY) {
-        if let Ok(data) = chr.read().await {
-            if let Some(&val) = data.first() {
-                let _ = tx.send(BleEvent::BatteryLevel(val)).await;
+        match chr.read().await {
+            Ok(data) => {
+                if let Some(&val) = data.first() {
+                    log::debug!("Initial battery level: {val}%");
+                    let _ = tx.send(BleEvent::BatteryLevel(val)).await;
+                }
             }
+            Err(e) => log::warn!("Failed to read battery: {e}"),
         }
     }
     if let Some(chr) = chars.get(&CHR_HEART_RATE) {
         if let Ok(data) = chr.read().await {
             if let Some(&val) = data.get(1) {
+                log::debug!("Initial heart rate: {val} bpm");
                 let _ = tx.send(BleEvent::HeartRate(val)).await;
             }
         }
@@ -268,7 +348,9 @@ async fn do_connect(
     if let Some(chr) = chars.get(&CHR_STEP_COUNT) {
         if let Ok(data) = chr.read().await {
             if let Ok(bytes) = <[u8; 4]>::try_from(data.as_slice()) {
-                let _ = tx.send(BleEvent::StepCount(u32::from_le_bytes(bytes))).await;
+                let steps = u32::from_le_bytes(bytes);
+                log::debug!("Initial step count: {steps}");
+                let _ = tx.send(BleEvent::StepCount(steps)).await;
             }
         }
     }
@@ -276,32 +358,46 @@ async fn do_connect(
     // Start notify streams (boxed since bluer streams aren't Unpin)
     let mut battery_stream: Option<std::pin::Pin<Box<dyn futures::Stream<Item = Vec<u8>> + Send>>> =
         if let Some(chr) = chars.get(&CHR_BATTERY) {
-            chr.notify().await.ok().map(|s| Box::pin(s) as _)
+            match chr.notify().await {
+                Ok(s) => { log::debug!("Battery notify subscribed"); Some(Box::pin(s) as _) }
+                Err(e) => { log::warn!("Battery notify failed: {e}"); None }
+            }
         } else { None };
     let mut hr_stream: Option<std::pin::Pin<Box<dyn futures::Stream<Item = Vec<u8>> + Send>>> =
         if let Some(chr) = chars.get(&CHR_HEART_RATE) {
-            chr.notify().await.ok().map(|s| Box::pin(s) as _)
+            match chr.notify().await {
+                Ok(s) => { log::debug!("Heart rate notify subscribed"); Some(Box::pin(s) as _) }
+                Err(e) => { log::warn!("Heart rate notify failed: {e}"); None }
+            }
         } else { None };
     let mut step_stream: Option<std::pin::Pin<Box<dyn futures::Stream<Item = Vec<u8>> + Send>>> =
         if let Some(chr) = chars.get(&CHR_STEP_COUNT) {
-            chr.notify().await.ok().map(|s| Box::pin(s) as _)
+            match chr.notify().await {
+                Ok(s) => { log::debug!("Step count notify subscribed"); Some(Box::pin(s) as _) }
+                Err(e) => { log::warn!("Step count notify failed: {e}"); None }
+            }
         } else { None };
 
     let alert_chr = chars.get(&CHR_NEW_ALERT).cloned();
 
+    log::debug!("Subscribing to device property events on {addr}");
     // Monitor device for disconnect
     let mut prop_stream = device.events().await?;
+
+    log::info!("Connected and streaming data from {addr}");
 
     // Connected event loop
     loop {
         tokio::select! {
             val = next_or_pending(&mut battery_stream) => {
                 if let Some(&v) = val.first() {
+                    log::debug!("Battery update: {v}%");
                     let _ = tx.send(BleEvent::BatteryLevel(v)).await;
                 }
             }
             val = next_or_pending(&mut hr_stream) => {
                 if let Some(&v) = val.get(1) {
+                    log::debug!("Heart rate update: {v} bpm");
                     let _ = tx.send(BleEvent::HeartRate(v)).await;
                 }
             }
@@ -315,23 +411,28 @@ async fn do_connect(
                     Some(bluer::DeviceEvent::PropertyChanged(
                         bluer::DeviceProperty::Connected(false)
                     )) => {
+                        log::warn!("Device {addr} reported Connected=false via property stream");
                         let _ = tx.send(BleEvent::Disconnected {
                             reason: "Watch disconnected".into(),
                         }).await;
                         return Err(anyhow!("Device disconnected"));
                     }
+                    Some(bluer::DeviceEvent::PropertyChanged(prop)) => {
+                        log::debug!("Device property changed: {prop:?}");
+                    }
                     None => {
+                        log::warn!("Property event stream for {addr} ended unexpectedly");
                         let _ = tx.send(BleEvent::Disconnected {
                             reason: "Connection lost".into(),
                         }).await;
                         return Err(anyhow!("Property stream ended"));
                     }
-                    _ => {}
                 }
             }
             Some(cmd) = rx.recv() => {
                 match cmd {
                     BleCommand::Disconnect => {
+                        log::info!("User requested disconnect from {addr}");
                         let _ = device.disconnect().await;
                         let _ = tx.send(BleEvent::Disconnected {
                             reason: "User disconnected".into(),
@@ -339,6 +440,7 @@ async fn do_connect(
                         return Ok(DisconnectReason::UserRequested);
                     }
                     BleCommand::Connect(new_addr) => {
+                        log::info!("Switching device from {addr} to {new_addr}");
                         let _ = device.disconnect().await;
                         let _ = tx.send(BleEvent::Disconnected {
                             reason: "Switching device".into(),
@@ -346,12 +448,16 @@ async fn do_connect(
                         return Ok(DisconnectReason::NewDevice(new_addr));
                     }
                     BleCommand::SendNotification { title, body } => {
+                        log::debug!("Sending alert: '{title}'");
                         if let Some(ref chr) = alert_chr {
                             let msg = build_alert_message(0x00, &title, &body);
-                            let _ = chr.write(&msg).await;
+                            if let Err(e) = chr.write(&msg).await {
+                                log::warn!("Alert write failed: {e}");
+                            }
                         }
                     }
                     BleCommand::Shutdown => {
+                        log::info!("Shutdown requested while connected to {addr}");
                         let _ = device.disconnect().await;
                         return Ok(DisconnectReason::Shutdown);
                     }
@@ -378,12 +484,22 @@ async fn next_or_pending(
 async fn discover_characteristics(
     device: &Device,
 ) -> Result<HashMap<Uuid, bluer::gatt::remote::Characteristic>> {
-    // Wait for services to be resolved
-    for _ in 0..50 {
-        if device.is_services_resolved().await? {
-            break;
+    // Wait for services to be resolved (up to 5 s total, 100 ms steps).
+    let mut resolved = false;
+    for i in 0..50 {
+        match device.is_services_resolved().await {
+            Ok(true) => {
+                log::debug!("GATT services resolved after {}ms", i * 100);
+                resolved = true;
+                break;
+            }
+            Ok(false) => {}
+            Err(e) => log::warn!("is_services_resolved error: {e}"),
         }
         sleep(Duration::from_millis(100)).await;
+    }
+    if !resolved {
+        log::warn!("Services not resolved after 5s — proceeding anyway");
     }
 
     let mut map = HashMap::new();
