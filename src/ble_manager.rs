@@ -122,6 +122,7 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
     let mut auto_addr: Option<Address> = None;
     let mut attempts: u32 = 0;
     let mut user_disconnected = false;
+    let mut needs_rescan = false;
 
     loop {
         // If we should auto-reconnect, do so after backoff
@@ -142,6 +143,7 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                                 auto_addr = None;
                                 user_disconnected = true;
                                 attempts = 0;
+                                needs_rescan = false;
                                 let _ = tx.send(BleEvent::Disconnected { reason: "User cancelled".into() }).await;
                                 continue;
                             }
@@ -153,6 +155,7 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                                 log::info!("User requested new device {new_addr} during reconnect wait");
                                 auto_addr = Some(new_addr);
                                 attempts = 0;
+                                needs_rescan = false;
                                 user_disconnected = false;
                                 continue;
                             }
@@ -160,6 +163,14 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                         }
                     }
                 }
+            }
+
+            // BlueZ evicts device D-Bus objects after repeated failures. Re-scan now (after
+            // the backoff) so the object is fresh when we immediately attempt to connect.
+            if needs_rescan {
+                log::info!("BlueZ dropped device object for {addr} — rescanning to refresh cache");
+                let _ = do_scan(&adapter, &tx).await;
+                needs_rescan = false;
             }
 
             // Check adapter power before each attempt (Halium may toggle BT).
@@ -191,6 +202,9 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                 }
                 Err(e) => {
                     log::warn!("Connection attempt {} failed: {e}", attempts + 1);
+                    if e.to_string().contains("not present or removed") {
+                        needs_rescan = true;
+                    }
                     attempts += 1;
                 }
             }
@@ -212,6 +226,7 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                 log::info!("User requested connect to {addr}");
                 auto_addr = Some(addr);
                 attempts = 0;
+                needs_rescan = false;
                 user_disconnected = false;
             }
             Some(BleCommand::Shutdown) => {
