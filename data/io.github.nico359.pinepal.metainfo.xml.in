@@ -10,6 +10,8 @@
     <p>PinePal is a companion app for PineTime smartwatches running InfiniTime. Connect via Bluetooth LE to view battery, heart rate, and step count, forward notifications from your phone, and track your step history over time.</p>
   </description>
 
+  <icon type="stock">io.github.nico359.pinepal</icon>
+
   <developer id="io.github.nico359">
     <name>nico359</name>
   </developer>
@@ -23,6 +25,17 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.2.0" date="2026-04-18">
+      <description translate="no">
+        <p>Stability and usability improvements.</p>
+        <ul>
+          <li>Added app icon</li>
+          <li>Improved BLE reconnection reliability on the FuriPhone</li>
+          <li>Removed unnecessary network access from the Flatpak manifest</li>
+          <li>Added in-app diagnostic log viewer and export (Ctrl+Shift+D)</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-04-10">
       <description translate="no">
         <p>Initial release.</p>
