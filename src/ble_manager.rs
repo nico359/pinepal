@@ -4,6 +4,11 @@
 
 use anyhow::{anyhow, Result};
 use bluer::{Adapter, Address, Device};
+use bluer::gatt::local::{
+    Application, ApplicationHandle, Characteristic, CharacteristicRead, Service,
+};
+use chrono::{Datelike, Local, Timelike};
+use futures::FutureExt;
 use futures::StreamExt;
 use std::collections::HashMap;
 use tokio::sync::mpsc;
@@ -11,6 +16,8 @@ use tokio::time::{sleep, timeout, Duration};
 use uuid::Uuid;
 
 // Standard BLE UUIDs
+const SRV_CURRENT_TIME: Uuid = uuid::uuid!("00001805-0000-1000-8000-00805f9b34fb");
+const CHR_CURRENT_TIME: Uuid = uuid::uuid!("00002a2b-0000-1000-8000-00805f9b34fb");
 const CHR_BATTERY: Uuid = uuid::uuid!("00002a19-0000-1000-8000-00805f9b34fb");
 const CHR_FIRMWARE_REV: Uuid = uuid::uuid!("00002a26-0000-1000-8000-00805f9b34fb");
 const CHR_HEART_RATE: Uuid = uuid::uuid!("00002a37-0000-1000-8000-00805f9b34fb");
@@ -18,6 +25,50 @@ const CHR_NEW_ALERT: Uuid = uuid::uuid!("00002a46-0000-1000-8000-00805f9b34fb");
 
 // InfiniTime custom UUIDs
 const CHR_STEP_COUNT: Uuid = uuid::uuid!("00030001-78fc-48fe-8e23-433b3a1942d0");
+
+/// Starts a local GATT server advertising the Current Time Service (CTS).
+/// InfiniTime reads this characteristic on connect to sync its clock.
+/// The returned handle must be kept alive to keep the service registered.
+async fn start_current_time_service(adapter: &Adapter) -> bluer::Result<ApplicationHandle> {
+    let app = Application {
+        services: vec![Service {
+            uuid: SRV_CURRENT_TIME,
+            primary: true,
+            characteristics: vec![Characteristic {
+                uuid: CHR_CURRENT_TIME,
+                read: Some(CharacteristicRead {
+                    read: true,
+                    fun: Box::new(move |_req| {
+                        async move {
+                            let now = Local::now();
+                            let year = (now.year() as u16).to_le_bytes();
+                            let payload = vec![
+                                year[0],
+                                year[1],
+                                now.month() as u8,
+                                now.day() as u8,
+                                now.hour() as u8,
+                                now.minute() as u8,
+                                now.second() as u8,
+                                now.weekday().number_from_monday() as u8,
+                                0x00, // Fractions256
+                                0x00, // Adjust reason
+                            ];
+                            log::debug!("CTS read: {:?}", payload);
+                            Ok(payload)
+                        }
+                        .boxed()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    adapter.serve_gatt_application(app).await
+}
 
 // Reconnection parameters
 const BASE_DELAY_SECS: u64 = 1;
@@ -118,6 +169,18 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
         Ok(false) => log::warn!("Adapter is powered OFF — BLE operations will fail"),
         Err(e) => log::warn!("Could not check adapter power state: {e}"),
     }
+
+    // Start the local Current Time Service so InfiniTime can sync its clock on connect.
+    let _cts_handle = match start_current_time_service(&adapter).await {
+        Ok(h) => {
+            log::info!("Current Time Service registered (watch will sync time on connect)");
+            Some(h)
+        }
+        Err(e) => {
+            log::warn!("Failed to register Current Time Service: {e} (time sync unavailable)");
+            None
+        }
+    };
 
     let mut auto_addr: Option<Address> = None;
     let mut attempts: u32 = 0;
