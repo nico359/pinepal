@@ -172,6 +172,10 @@ impl PinepalWindow {
                 log::error!("BLE error: {msg}");
                 imp.devices_page.set_error(&msg);
             }
+            BleEvent::BluetoothOff => {
+                log::warn!("Bluetooth is off");
+                imp.devices_page.set_bluetooth_off();
+            }
             BleEvent::Reconnecting { attempt, delay_secs } => {
                 imp.devices_page.set_reconnecting(attempt, delay_secs);
             }

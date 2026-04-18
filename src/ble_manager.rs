@@ -3,7 +3,7 @@
 // Handles discovery, connection, characteristic I/O, and reconnection with backoff.
 
 use anyhow::{anyhow, Result};
-use bluer::{Adapter, Address, Device};
+use bluer::{Adapter, AdapterEvent, AdapterProperty, Address, Device};
 use bluer::gatt::local::{
     Application, ApplicationHandle, Characteristic, CharacteristicRead, Service,
 };
@@ -77,6 +77,66 @@ const CONNECT_TIMEOUT_SECS: u64 = 15;
 
 const DEVICE_NAME: &str = "InfiniTime";
 
+/// Waits until the Bluetooth adapter is powered on.
+/// Sends `BleEvent::BluetoothOff` while waiting so the UI can inform the user.
+/// Returns `false` if a shutdown command is received and the task should exit.
+async fn wait_for_bluetooth_on(
+    adapter: &Adapter,
+    tx: &mpsc::Sender<BleEvent>,
+    rx: &mut mpsc::Receiver<BleCommand>,
+) -> bool {
+    if adapter.is_powered().await.unwrap_or(true) {
+        return true;
+    }
+
+    log::warn!("Bluetooth is off — waiting for user to enable it");
+    let _ = tx.send(BleEvent::BluetoothOff).await;
+
+    let events = match adapter.events().await {
+        Ok(e) => e,
+        Err(e) => {
+            log::error!("Cannot subscribe to adapter events: {e} — falling back to polling");
+            // Poll every 2 seconds as a fallback
+            loop {
+                sleep(Duration::from_secs(2)).await;
+                match adapter.is_powered().await {
+                    Ok(true) => {
+                        log::info!("Bluetooth turned on");
+                        return true;
+                    }
+                    Ok(false) => {}
+                    Err(_) => return true, // can't tell, just proceed
+                }
+            }
+        }
+    };
+
+    tokio::pin!(events);
+    loop {
+        tokio::select! {
+            event = events.next() => {
+                match event {
+                    Some(AdapterEvent::PropertyChanged(AdapterProperty::Powered(true))) => {
+                        log::info!("Bluetooth turned on — resuming");
+                        return true;
+                    }
+                    None => {
+                        log::warn!("Adapter event stream ended while waiting for Bluetooth");
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
+            cmd = rx.recv() => {
+                match cmd {
+                    Some(BleCommand::Shutdown) | None => return false,
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
 /// Events sent from BLE manager to the UI.
 #[derive(Debug, Clone)]
 pub enum BleEvent {
@@ -97,6 +157,7 @@ pub enum BleEvent {
     HeartRate(u8),
     StepCount(u32),
     Error(String),
+    BluetoothOff,
     Reconnecting {
         attempt: u32,
         delay_secs: u64,
@@ -163,12 +224,11 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
         }
     };
 
-    // Log adapter powered state upfront — useful on Halium where BT may not be ready.
-    match adapter.is_powered().await {
-        Ok(true) => log::info!("Adapter is powered on"),
-        Ok(false) => log::warn!("Adapter is powered OFF — BLE operations will fail"),
-        Err(e) => log::warn!("Could not check adapter power state: {e}"),
+    // Wait for Bluetooth to be powered on before proceeding.
+    if !wait_for_bluetooth_on(&adapter, &tx, &mut rx).await {
+        return; // shutdown requested while waiting
     }
+    log::info!("Adapter is powered on");
 
     // Start the local Current Time Service so InfiniTime can sync its clock on connect.
     let _cts_handle = match start_current_time_service(&adapter).await {
@@ -236,11 +296,9 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                 needs_rescan = false;
             }
 
-            // Check adapter power before each attempt (Halium may toggle BT).
-            match adapter.is_powered().await {
-                Ok(false) => log::warn!("Adapter unpowered before connect attempt {}", attempts + 1),
-                Err(e) => log::warn!("Could not check adapter power: {e}"),
-                _ => {}
+            // If Bluetooth was turned off, wait for it to come back before connecting.
+            if !wait_for_bluetooth_on(&adapter, &tx, &mut rx).await {
+                return;
             }
 
             log::info!("Connecting to {addr} (attempt {})", attempts + 1);

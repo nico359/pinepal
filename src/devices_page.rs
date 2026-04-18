@@ -72,6 +72,15 @@ impl PinepalDevicesPage {
         imp.device_list.set_visible(false);
     }
 
+    pub fn set_bluetooth_off(&self) {
+        let imp = self.imp();
+        imp.scan_spinner.set_spinning(false);
+        imp.status_page.set_title("Bluetooth is Off");
+        imp.status_page
+            .set_description(Some("Turn on Bluetooth to connect to your PineTime."));
+        imp.status_page.set_icon_name(Some("bluetooth-disabled-symbolic"));
+    }
+
     pub fn set_error(&self, message: &str) {
         let imp = self.imp();
         imp.scan_spinner.set_spinning(false);
