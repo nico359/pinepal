@@ -102,6 +102,7 @@ async fn wait_for_bluetooth_on(
                 match adapter.is_powered().await {
                     Ok(true) => {
                         log::info!("Bluetooth turned on");
+                        let _ = tx.send(BleEvent::BluetoothReady).await;
                         return true;
                     }
                     Ok(false) => {}
@@ -118,6 +119,7 @@ async fn wait_for_bluetooth_on(
                 match event {
                     Some(AdapterEvent::PropertyChanged(AdapterProperty::Powered(true))) => {
                         log::info!("Bluetooth turned on — resuming");
+                        let _ = tx.send(BleEvent::BluetoothReady).await;
                         return true;
                     }
                     None => {
@@ -158,6 +160,7 @@ pub enum BleEvent {
     StepCount(u32),
     Error(String),
     BluetoothOff,
+    BluetoothReady,
     Reconnecting {
         attempt: u32,
         delay_secs: u64,
@@ -424,6 +427,9 @@ async fn do_connect(
 ) -> Result<DisconnectReason> {
     let device = adapter.device(addr)?;
 
+    // Subscribe to adapter events early so we detect BT being turned off.
+    let mut adapter_events = adapter.events().await?;
+
     log::info!("Initiating connection to {addr} (timeout {}s)", CONNECT_TIMEOUT_SECS);
 
     // Connect with timeout
@@ -596,6 +602,23 @@ async fn do_connect(
                         log::info!("Shutdown requested while connected to {addr}");
                         let _ = device.disconnect().await;
                         return Ok(DisconnectReason::Shutdown);
+                    }
+                    _ => {}
+                }
+            }
+            evt = adapter_events.next() => {
+                match evt {
+                    Some(AdapterEvent::PropertyChanged(AdapterProperty::Powered(false))) => {
+                        log::warn!("Bluetooth turned off while connected to {addr}");
+                        let _ = tx.send(BleEvent::BluetoothOff).await;
+                        return Err(anyhow!("Bluetooth adapter powered off"));
+                    }
+                    None => {
+                        log::warn!("Adapter event stream ended while connected to {addr}");
+                        let _ = tx.send(BleEvent::Disconnected {
+                            reason: "Bluetooth unavailable".into(),
+                        }).await;
+                        return Err(anyhow!("Adapter event stream ended"));
                     }
                     _ => {}
                 }

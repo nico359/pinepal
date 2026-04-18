@@ -72,6 +72,16 @@ impl PinepalDevicesPage {
         imp.device_list.set_visible(false);
     }
 
+    pub fn set_ready(&self) {
+        let imp = self.imp();
+        imp.scan_spinner.set_spinning(false);
+        imp.status_page.set_title("Find Your PineTime");
+        imp.status_page
+            .set_description(Some("Tap the scan button to search for nearby devices."));
+        imp.status_page.set_icon_name(Some("bluetooth-symbolic"));
+        imp.device_list.set_visible(false);
+    }
+
     pub fn set_bluetooth_off(&self) {
         let imp = self.imp();
         imp.scan_spinner.set_spinning(false);

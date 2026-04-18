@@ -176,6 +176,11 @@ impl PinepalWindow {
                 log::warn!("Bluetooth is off");
                 imp.devices_page.set_bluetooth_off();
             }
+            BleEvent::BluetoothReady => {
+                log::info!("Bluetooth is on");
+                self.show_devices();
+                imp.devices_page.set_ready();
+            }
             BleEvent::Reconnecting { attempt, delay_secs } => {
                 imp.devices_page.set_reconnecting(attempt, delay_secs);
             }
