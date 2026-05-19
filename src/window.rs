@@ -154,6 +154,11 @@ impl PinepalWindow {
                 let _ = settings.set_string("auto-connect-address", &address.to_string());
                 self.show_dashboard(&firmware);
             }
+            BleEvent::FirmwareVersion(fw) => {
+                if let Some(ref dash) = *imp.dashboard_page.borrow() {
+                    dash.set_firmware(&fw);
+                }
+            }
             BleEvent::Disconnected { reason } => {
                 log::info!("Disconnected: {reason}");
                 self.show_devices();

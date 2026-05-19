@@ -152,6 +152,7 @@ pub enum BleEvent {
         address: Address,
         firmware: String,
     },
+    FirmwareVersion(String),
     Disconnected {
         reason: String,
     },
@@ -479,46 +480,48 @@ async fn do_connect(
         chars.len()
     );
 
-    // Read firmware version
-    let firmware = match chars.get(&CHR_FIRMWARE_REV) {
-        Some(chr) => {
-            let data = chr.read().await.unwrap_or_default();
-            String::from_utf8(data).unwrap_or_else(|_| "Unknown".into())
-        }
-        None => "Unknown".into(),
-    };
-    log::info!("Firmware version: {firmware}");
+    // Show the dashboard immediately with a placeholder — real data arrives below.
+    let _ = tx.send(BleEvent::Connected { address: addr, firmware: "…".into() }).await;
 
-    let _ = tx.send(BleEvent::Connected { address: addr, firmware }).await;
+    // Read firmware, battery, heart rate and step count in parallel.
+    let fw_chr    = chars.get(&CHR_FIRMWARE_REV).cloned();
+    let bat_chr   = chars.get(&CHR_BATTERY).cloned();
+    let hr_chr    = chars.get(&CHR_HEART_RATE).cloned();
+    let steps_chr = chars.get(&CHR_STEP_COUNT).cloned();
 
-    // Initial reads
-    if let Some(chr) = chars.get(&CHR_BATTERY) {
-        match chr.read().await {
-            Ok(data) => {
-                if let Some(&val) = data.first() {
-                    log::debug!("Initial battery level: {val}%");
-                    let _ = tx.send(BleEvent::BatteryLevel(val)).await;
-                }
-            }
-            Err(e) => log::warn!("Failed to read battery: {e}"),
-        }
+    let (firmware, battery, hr, steps) = tokio::join!(
+        async move {
+            let data = fw_chr?.read().await.ok()?;
+            String::from_utf8(data).ok().filter(|s| !s.is_empty())
+        },
+        async move {
+            let data = bat_chr?.read().await.ok()?;
+            data.first().copied()
+        },
+        async move {
+            let data = hr_chr?.read().await.ok()?;
+            data.get(1).copied()
+        },
+        async move {
+            let data = steps_chr?.read().await.ok()?;
+            <[u8; 4]>::try_from(data.as_slice()).ok().map(u32::from_le_bytes)
+        },
+    );
+
+    let fw = firmware.unwrap_or_else(|| "Unknown".into());
+    log::info!("Firmware version: {fw}");
+    let _ = tx.send(BleEvent::FirmwareVersion(fw)).await;
+    if let Some(level) = battery {
+        log::debug!("Initial battery level: {level}%");
+        let _ = tx.send(BleEvent::BatteryLevel(level)).await;
     }
-    if let Some(chr) = chars.get(&CHR_HEART_RATE) {
-        if let Ok(data) = chr.read().await {
-            if let Some(&val) = data.get(1) {
-                log::debug!("Initial heart rate: {val} bpm");
-                let _ = tx.send(BleEvent::HeartRate(val)).await;
-            }
-        }
+    if let Some(bpm) = hr {
+        log::debug!("Initial heart rate: {bpm} bpm");
+        let _ = tx.send(BleEvent::HeartRate(bpm)).await;
     }
-    if let Some(chr) = chars.get(&CHR_STEP_COUNT) {
-        if let Ok(data) = chr.read().await {
-            if let Ok(bytes) = <[u8; 4]>::try_from(data.as_slice()) {
-                let steps = u32::from_le_bytes(bytes);
-                log::debug!("Initial step count: {steps}");
-                let _ = tx.send(BleEvent::StepCount(steps)).await;
-            }
-        }
+    if let Some(count) = steps {
+        log::debug!("Initial step count: {count}");
+        let _ = tx.send(BleEvent::StepCount(count)).await;
     }
 
     // Start notify streams (boxed since bluer streams aren't Unpin)

@@ -20,7 +20,7 @@ mod imp {
         #[template_child]
         pub cancel_reconnect_button: TemplateChild<gtk::Button>,
 
-        pub devices: RefCell<Vec<(bluer::Address, String)>>,
+        pub devices: RefCell<Vec<(bluer::Address, String, gtk::Image, gtk::Spinner)>>,
     }
 
     #[glib::object_subclass]
@@ -115,17 +115,26 @@ impl PinepalDevicesPage {
         let mut devices = imp.devices.borrow_mut();
 
         // Check for duplicate
-        if devices.iter().any(|(a, _)| *a == address) {
+        if devices.iter().any(|(a, _, _, _)| *a == address) {
             return false;
         }
-        devices.push((address, name.to_string()));
+
+        let arrow = gtk::Image::from_icon_name("go-next-symbolic");
+        let spinner = gtk::Spinner::builder()
+            .width_request(16)
+            .height_request(16)
+            .visible(false)
+            .build();
 
         let row = adw::ActionRow::builder()
             .title(name)
             .subtitle(&address.to_string())
             .activatable(true)
             .build();
-        row.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
+        row.add_suffix(&spinner);
+        row.add_suffix(&arrow);
+
+        devices.push((address, name.to_string(), arrow, spinner));
 
         imp.device_list.append(&row);
         imp.device_list.set_visible(true);
@@ -137,7 +146,17 @@ impl PinepalDevicesPage {
 
     /// Get the address for a device at a given index.
     pub fn device_address_at(&self, index: usize) -> Option<bluer::Address> {
-        self.imp().devices.borrow().get(index).map(|(a, _)| *a)
+        self.imp().devices.borrow().get(index).map(|(a, _, _, _)| *a)
+    }
+
+    /// Show a connecting spinner on the row at `index`, hiding its arrow.
+    pub fn set_row_connecting(&self, index: usize) {
+        let devices = self.imp().devices.borrow();
+        if let Some((_, _, arrow, spinner)) = devices.get(index) {
+            arrow.set_visible(false);
+            spinner.set_visible(true);
+            spinner.set_spinning(true);
+        }
     }
 
     /// Connect the list's row-activated signal.
@@ -146,6 +165,7 @@ impl PinepalDevicesPage {
         self.imp().device_list.connect_row_activated(move |_, row| {
             let idx = row.index() as usize;
             if let Some(addr) = page.device_address_at(idx) {
+                page.set_row_connecting(idx);
                 f(addr);
             }
         });
