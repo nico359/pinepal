@@ -20,11 +20,37 @@
   <url type="vcs-browser">https://github.com/nico359/pinepal</url>
   <url type="bugtracker">https://github.com/nico359/pinepal/issues</url>
 
+  <recommends>
+    <display_length compare="ge">360</display_length>
+    <control>touch</control>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
+  <supports>
+    <control>touch</control>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+
   <translation type="gettext">pinepal</translation>
   <launchable type="desktop-id">io.github.nico359.pinepal.desktop</launchable>
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.0" date="2026-05-19">
+      <description translate="no">
+        <p>Mostly QOL improvements.</p>
+        <ul>
+          <li>App now reconnects to last known watch automatically on startup</li>
+          <li>Autostart via Background Portal (might now work in e.g. Phosh)</li>
+          <li>Added ability to cancel a reconnect loop without quitting the app</li>
+          <li>Added quit button in the menu that completely kills the app</li>
+          <li>Settings moved to a separate page in the menu</li>
+          <li>Made initial connection attempt a little bit more obvious</li>
+          <li>Somewhat fixed missing icons</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-04-18">
       <description translate="no">
         <p>Stability and usability improvements.</p>
