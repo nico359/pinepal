@@ -109,6 +109,12 @@ impl PinepalWindow {
             ble_for_devices.send(BleCommand::Connect(addr));
         });
 
+        // Cancel reconnect button
+        let ble_for_cancel = ble.clone();
+        imp.devices_page.connect_cancel_reconnect(move || {
+            ble_for_cancel.send(BleCommand::Disconnect);
+        });
+
         // Start scanning
         ble.send(BleCommand::StartScan);
 
@@ -120,6 +126,16 @@ impl PinepalWindow {
             }
             glib::ControlFlow::Continue
         });
+    }
+
+    pub fn shutdown(&self) {
+        self.set_hide_on_close(false);
+
+        if let Some(ref ble) = *self.imp().ble_handle.borrow() {
+            ble.send(BleCommand::Shutdown);
+        }
+
+        self.close();
     }
 
     fn handle_ble_event(&self, event: BleEvent) {

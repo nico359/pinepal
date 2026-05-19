@@ -94,7 +94,7 @@ impl PinepalApplication {
 
     fn setup_gactions(&self) {
         let quit_action = gio::ActionEntry::builder("quit")
-            .activate(move |app: &Self, _, _| app.quit())
+            .activate(move |app: &Self, _, _| app.full_quit())
             .build();
         let about_action = gio::ActionEntry::builder("about")
             .activate(move |app: &Self, _, _| app.show_about())
@@ -103,6 +103,17 @@ impl PinepalApplication {
             .activate(move |app: &Self, _, _| app.show_logs())
             .build();
         self.add_action_entries([quit_action, about_action, logs_action]);
+    }
+
+    fn full_quit(&self) {
+        if let Some(window) = self
+            .active_window()
+            .and_then(|window| window.downcast::<PinepalWindow>().ok())
+        {
+            window.shutdown();
+        }
+
+        self.quit();
     }
 
     fn show_logs(&self) {

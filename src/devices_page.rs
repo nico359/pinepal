@@ -17,6 +17,8 @@ mod imp {
         pub scan_spinner: TemplateChild<gtk::Spinner>,
         #[template_child]
         pub device_list: TemplateChild<gtk::ListBox>,
+        #[template_child]
+        pub cancel_reconnect_button: TemplateChild<gtk::Button>,
 
         pub devices: RefCell<Vec<(bluer::Address, String)>>,
     }
@@ -54,6 +56,7 @@ impl PinepalDevicesPage {
     pub fn set_scanning(&self, scanning: bool) {
         let imp = self.imp();
         imp.scan_spinner.set_spinning(scanning);
+        imp.cancel_reconnect_button.set_visible(false);
         if scanning {
             imp.status_page.set_title("Looking for InfiniTime…");
             imp.status_page.set_description(Some(
@@ -66,15 +69,20 @@ impl PinepalDevicesPage {
         let imp = self.imp();
         imp.scan_spinner.set_spinning(true);
         imp.status_page.set_title("Reconnecting…");
-        imp.status_page.set_description(Some(&format!(
-            "Attempt {attempt}, retrying in {delay_secs}s"
-        )));
+        let desc = if delay_secs == 0 {
+            format!("Attempt {attempt}, connecting…")
+        } else {
+            format!("Attempt {attempt}, retrying in {delay_secs}s")
+        };
+        imp.status_page.set_description(Some(&desc));
         imp.device_list.set_visible(false);
+        imp.cancel_reconnect_button.set_visible(true);
     }
 
     pub fn set_ready(&self) {
         let imp = self.imp();
         imp.scan_spinner.set_spinning(false);
+        imp.cancel_reconnect_button.set_visible(false);
         imp.status_page.set_title("Find Your PineTime");
         imp.status_page
             .set_description(Some("Tap the scan button to search for nearby devices."));
@@ -85,6 +93,7 @@ impl PinepalDevicesPage {
     pub fn set_bluetooth_off(&self) {
         let imp = self.imp();
         imp.scan_spinner.set_spinning(false);
+        imp.cancel_reconnect_button.set_visible(false);
         imp.status_page.set_title("Bluetooth is Off");
         imp.status_page
             .set_description(Some("Turn on Bluetooth to connect to your PineTime."));
@@ -94,6 +103,7 @@ impl PinepalDevicesPage {
     pub fn set_error(&self, message: &str) {
         let imp = self.imp();
         imp.scan_spinner.set_spinning(false);
+        imp.cancel_reconnect_button.set_visible(false);
         imp.status_page.set_title("Connection Error");
         imp.status_page.set_description(Some(message));
         imp.status_page.set_icon_name(Some("dialog-error-symbolic"));
@@ -149,7 +159,12 @@ impl PinepalDevicesPage {
             imp.device_list.remove(&child);
         }
         imp.device_list.set_visible(false);
+        imp.cancel_reconnect_button.set_visible(false);
         imp.status_page.set_icon_name(Some("bluetooth-symbolic"));
+    }
+
+    pub fn connect_cancel_reconnect<F: Fn() + 'static>(&self, f: F) {
+        self.imp().cancel_reconnect_button.connect_clicked(move |_| f());
     }
 }
 

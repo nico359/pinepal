@@ -306,6 +306,9 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
 
             log::info!("Connecting to {addr} (attempt {})", attempts + 1);
 
+            // Tell the UI we're now actively attempting a connection.
+            let _ = tx.send(BleEvent::Reconnecting { attempt: attempts + 1, delay_secs: 0 }).await;
+
             // Attempt connection
             match do_connect(&adapter, addr, &tx, &mut rx).await {
                 Ok(DisconnectReason::UserRequested) => {
@@ -432,8 +435,29 @@ async fn do_connect(
 
     log::info!("Initiating connection to {addr} (timeout {}s)", CONNECT_TIMEOUT_SECS);
 
-    // Connect with timeout
-    match timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS), device.connect()).await {
+    // Connect with timeout, cancellable by Disconnect/Shutdown commands.
+    let connect_fut = timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS), device.connect());
+    tokio::pin!(connect_fut);
+    let connect_result = loop {
+        tokio::select! {
+            result = &mut connect_fut => break result,
+            Some(cmd) = rx.recv() => {
+                match cmd {
+                    BleCommand::Disconnect => {
+                        log::info!("User cancelled connection attempt to {addr}");
+                        let _ = tx.send(BleEvent::Disconnected { reason: "User cancelled".into() }).await;
+                        return Ok(DisconnectReason::UserRequested);
+                    }
+                    BleCommand::Shutdown => {
+                        log::info!("Shutdown during connection attempt to {addr}");
+                        return Ok(DisconnectReason::Shutdown);
+                    }
+                    _ => {} // other commands are ignored while connecting
+                }
+            }
+        }
+    };
+    match connect_result {
         Err(_) => {
             log::warn!("Connection to {addr} timed out after {}s", CONNECT_TIMEOUT_SECS);
             return Err(anyhow!("Connection timed out"));
