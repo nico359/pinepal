@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist gettext-domain="pinepal">
 	<schema id="io.github.nico359.pinepal" path="/io/github/nico359/pinepal/">
+		<key name="autostart" type="b">
+			<default>false</default>
+			<summary>Launch at login</summary>
+			<description>Whether to automatically start PinePal when the user logs in (managed via the XDG Background portal).</description>
+		</key>
 		<key name="auto-connect-address" type="s">
 			<default>''</default>
 			<summary>Last connected device address</summary>

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod application;
+mod background_portal;
 mod ble_manager;
 mod config;
 mod dashboard_page;
@@ -8,6 +9,7 @@ mod devices_page;
 mod log_collector;
 mod log_viewer;
 mod notifications;
+mod preferences_dialog;
 mod step_chart;
 mod step_db;
 mod window;
