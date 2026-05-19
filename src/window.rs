@@ -230,10 +230,6 @@ impl PinepalWindow {
         let dashboard = PinepalDashboardPage::new();
         dashboard.set_firmware(firmware);
 
-        // Bind settings
-        let settings = gio::Settings::new("io.github.nico359.pinepal");
-        dashboard.bind_settings(&settings);
-
         // Set step DB
         if let Some(ref db) = *imp.step_db.borrow() {
             dashboard.set_step_db(db.clone());

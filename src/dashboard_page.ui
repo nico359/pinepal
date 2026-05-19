@@ -31,7 +31,7 @@
                         <property name="subtitle">—</property>
                         <child type="prefix">
                           <object class="GtkImage">
-                            <property name="icon-name">system-software-update-symbolic</property>
+                            <property name="icon-name">dialog-information-symbolic</property>
                           </object>
                         </child>
                       </object>
@@ -69,7 +69,7 @@
                         <property name="subtitle">—</property>
                         <child type="prefix">
                           <object class="GtkImage">
-                            <property name="icon-name">heart-filled-symbolic</property>
+                            <property name="icon-name">heart-symbolic</property>
                           </object>
                         </child>
                       </object>
@@ -80,28 +80,9 @@
                         <property name="subtitle">—</property>
                         <child type="prefix">
                           <object class="GtkImage">
-                            <property name="icon-name">shoe-symbolic</property>
+                            <property name="icon-name">system-run-symbolic</property>
                           </object>
                         </child>
-                      </object>
-                    </child>
-                  </object>
-                </child>
-
-                <!-- Settings -->
-                <child>
-                  <object class="AdwPreferencesGroup">
-                    <property name="title" translatable="yes">Settings</property>
-                    <child>
-                      <object class="AdwSwitchRow" id="notif_switch">
-                        <property name="title" translatable="yes">Forward Notifications</property>
-                        <property name="subtitle" translatable="yes">Send desktop notifications to watch</property>
-                      </object>
-                    </child>
-                    <child>
-                      <object class="AdwSwitchRow" id="background_switch">
-                        <property name="title" translatable="yes">Run in Background</property>
-                        <property name="subtitle" translatable="yes">Keep connected when window is closed</property>
                       </object>
                     </child>
                   </object>

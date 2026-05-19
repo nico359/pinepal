@@ -47,6 +47,12 @@ mod imp {
         fn startup(&self) {
             self.parent_startup();
 
+            // Register bundled app icons so GTK can find e.g. heart-symbolic.
+            if let Some(display) = gtk::gdk::Display::default() {
+                gtk::IconTheme::for_display(&display)
+                    .add_resource_path("/io/github/nico359/pinepal/icons");
+            }
+
             // Always initialise tokio early so both startup paths can use it.
             self.tokio_rt.get_or_init(|| {
                 tokio::runtime::Builder::new_multi_thread()

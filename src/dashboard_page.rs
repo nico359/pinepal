@@ -2,7 +2,7 @@
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
-use gtk::{gio, glib};
+use gtk::glib;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -26,10 +26,6 @@ mod imp {
         #[template_child]
         pub steps_row: TemplateChild<adw::ActionRow>,
         #[template_child]
-        pub notif_switch: TemplateChild<adw::SwitchRow>,
-        #[template_child]
-        pub background_switch: TemplateChild<adw::SwitchRow>,
-        #[template_child]
         pub range_7d: TemplateChild<gtk::ToggleButton>,
         #[template_child]
         pub range_30d: TemplateChild<gtk::ToggleButton>,
@@ -52,8 +48,6 @@ mod imp {
                 battery_level: Default::default(),
                 heart_rate_row: Default::default(),
                 steps_row: Default::default(),
-                notif_switch: Default::default(),
-                background_switch: Default::default(),
                 range_7d: Default::default(),
                 range_30d: Default::default(),
                 range_all: Default::default(),
@@ -157,15 +151,6 @@ impl PinepalDashboardPage {
         self.imp()
             .steps_row
             .set_subtitle(&format!("{}", steps));
-    }
-
-    pub fn bind_settings(&self, settings: &gio::Settings) {
-        settings
-            .bind("forward-notifications", &*self.imp().notif_switch, "active")
-            .build();
-        settings
-            .bind("run-in-background", &*self.imp().background_switch, "active")
-            .build();
     }
 
     pub fn refresh_chart(&self) {
