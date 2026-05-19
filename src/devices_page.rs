@@ -68,7 +68,8 @@ impl PinepalDevicesPage {
     pub fn set_reconnecting(&self, attempt: u32, delay_secs: u64) {
         let imp = self.imp();
         imp.scan_spinner.set_spinning(true);
-        imp.status_page.set_title("Reconnecting…");
+        let title = if attempt <= 1 { "Connecting…" } else { "Reconnecting…" };
+        imp.status_page.set_title(title);
         let desc = if delay_secs == 0 {
             format!("Attempt {attempt}, connecting…")
         } else {

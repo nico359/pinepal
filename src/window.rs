@@ -10,6 +10,7 @@ use crate::ble_manager::{BleCommand, BleEvent, BleHandle};
 use crate::dashboard_page::PinepalDashboardPage;
 use crate::devices_page::PinepalDevicesPage;
 use crate::step_db::StepDb;
+use bluer::Address;
 
 mod imp {
     use super::*;
@@ -68,6 +69,7 @@ mod imp {
             let obj = self.obj();
             obj.setup_back_button();
             obj.setup_background_mode();
+            obj.setup_find_devices_action();
         }
     }
     impl WidgetImpl for PinepalWindow {}
@@ -115,8 +117,23 @@ impl PinepalWindow {
             ble_for_cancel.send(BleCommand::Disconnect);
         });
 
-        // Start scanning
-        ble.send(BleCommand::StartScan);
+        // Start scanning or auto-connect to last known watch
+        let settings = gio::Settings::new("io.github.nico359.pinepal");
+        let saved_addr = settings.string("auto-connect-address");
+        if saved_addr.is_empty() {
+            ble.send(BleCommand::StartScan);
+        } else {
+            match saved_addr.parse::<Address>() {
+                Ok(addr) => {
+                    log::info!("Auto-connecting to last known watch {addr}");
+                    ble.send(BleCommand::Connect(addr));
+                }
+                Err(e) => {
+                    log::warn!("Saved address '{saved_addr}' is invalid ({e}), scanning instead");
+                    ble.send(BleCommand::StartScan);
+                }
+            }
+        }
 
         // Poll BLE events on glib main loop
         let window = self.clone();
@@ -271,5 +288,23 @@ impl PinepalWindow {
         settings.connect_changed(Some("run-in-background"), move |s, _| {
             window.set_hide_on_close(s.boolean("run-in-background"));
         });
+    }
+
+    fn setup_find_devices_action(&self) {
+        let window = self.clone();
+        let action = gio::SimpleAction::new("find-devices", None);
+        action.connect_activate(move |_, _| {
+            let imp = window.imp();
+            if imp.dashboard_page.borrow().is_some() {
+                // Disconnect from watch; Disconnected event will call show_devices()
+                if let Some(ref ble) = *imp.ble_handle.borrow() {
+                    ble.send(BleCommand::Disconnect);
+                }
+            } else {
+                // Not connected — jump straight to device scan
+                window.show_devices();
+            }
+        });
+        self.add_action(&action);
     }
 }

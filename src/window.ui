@@ -46,6 +46,12 @@
   <menu id="primary_menu">
     <section>
       <item>
+        <attribute name="label" translatable="yes">_Find Devices</attribute>
+        <attribute name="action">win.find-devices</attribute>
+      </item>
+    </section>
+    <section>
+      <item>
         <attribute name="label" translatable="yes">_Diagnostic Logs</attribute>
         <attribute name="action">app.show-logs</attribute>
       </item>

@@ -274,6 +274,15 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                                 let _ = tx.send(BleEvent::Disconnected { reason: "User cancelled".into() }).await;
                                 continue;
                             }
+                            BleCommand::StartScan => {
+                                log::info!("User requested device scan, cancelling reconnect");
+                                auto_addr = None;
+                                user_disconnected = true;
+                                attempts = 0;
+                                needs_rescan = false;
+                                let _ = tx.send(BleEvent::Disconnected { reason: "User requested scan".into() }).await;
+                                continue;
+                            }
                             BleCommand::Shutdown => {
                                 log::info!("BLE task shutting down during reconnect wait");
                                 return;
@@ -447,6 +456,11 @@ async fn do_connect(
                     BleCommand::Disconnect => {
                         log::info!("User cancelled connection attempt to {addr}");
                         let _ = tx.send(BleEvent::Disconnected { reason: "User cancelled".into() }).await;
+                        return Ok(DisconnectReason::UserRequested);
+                    }
+                    BleCommand::StartScan => {
+                        log::info!("User requested scan, aborting connection attempt to {addr}");
+                        let _ = tx.send(BleEvent::Disconnected { reason: "User requested scan".into() }).await;
                         return Ok(DisconnectReason::UserRequested);
                     }
                     BleCommand::Shutdown => {
