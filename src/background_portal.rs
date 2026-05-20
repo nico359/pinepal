@@ -51,7 +51,13 @@ pub async fn request_autostart(enable: bool) -> anyhow::Result<bool> {
         Value::from("Keep PinePal running to stay connected to your PineTime"),
     );
     options.insert("autostart", Value::from(enable));
-    options.insert("dbus-activatable", Value::from(true));
+    // Provide an explicit commandline so the portal creates an autostart entry
+    // that passes --gapplication-service.  The portal wraps this in
+    // `flatpak run --command=…` when the app is sandboxed.
+    options.insert(
+        "commandline",
+        Value::from(vec!["/app/bin/pinepal", "--gapplication-service"]),
+    );
 
     let portal = zbus::Proxy::new(
         &conn,
