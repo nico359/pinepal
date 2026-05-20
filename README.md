@@ -9,6 +9,16 @@ Companion app for [PineTime](https://www.pine64.org/pinetime/) smartwatches runn
 - Step history chart with daily persistence (7d / 30d / all time)
 - Desktop notification forwarding to watch
 - Background mode (keeps connection alive when window is closed)
+- Said background mode can also be started manually by running flatpak run io.github.nico359.pinepal --gapplication-service
+- Autostart via Background Portal - might not work in e.g. Phosh because the Portal is not implemented there yet)
+
+## To be improved
+
+- Firmware Update of the watch
+- Maybe also heart rate history with the new feature of InfiniTime 1.16
+- Music controls
+- Accepting or declining calls (if that is even possible)
+- Synchronising time of the watch on connect
 
 ## Credits
 
@@ -16,8 +26,24 @@ Based on the work of [Watchmate](https://github.com/azymohliad/watchmate) by And
 
 ## AI Disclosure
 
-This application was built with the assistance of AI (GitHub Copilot CLI, Claude Opus 4.6).
+This application was built with the assistance of AI (GitHub Copilot CLI, Claude).
 
 ## Building
 
-The easiest way to build the app is by using GNOME Builder IDE.
+The easiest way to build the app is by using GNOME Builder IDE or flatpak-builder.
+
+Example using flatpak-builder as a flatpak:
+-  Install flatpak-builder
+```
+flatpak install org.flatpak.Builder
+```
+
+-  Compile the project into a local repo
+```
+flatpak run org.flatpak.Builder --repo=repo --force-clean --user build io.github.nico359.pinepal.json
+```
+
+-  Then create a bundle which you can install
+```
+flatpak build-bundle repo pinepal.flatpak io.github.nico359.pinepal
+```
