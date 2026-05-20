@@ -175,6 +175,9 @@ pub enum BleCommand {
     Connect(Address),
     Disconnect,
     SendNotification { title: String, body: String },
+    /// Re-read all characteristic values and re-emit the corresponding events.
+    /// Used when the GUI opens and takes over an already-connected service session.
+    RequestUpdate,
     Shutdown,
 }
 
@@ -638,6 +641,44 @@ async fn do_connect(
                                 log::warn!("Alert write failed: {e}");
                             }
                         }
+                    }
+                    BleCommand::RequestUpdate => {
+                        log::info!("RequestUpdate: re-reading all characteristics for {addr}");
+                        let fw_chr    = chars.get(&CHR_FIRMWARE_REV).cloned();
+                        let bat_chr   = chars.get(&CHR_BATTERY).cloned();
+                        let hr_chr    = chars.get(&CHR_HEART_RATE).cloned();
+                        let steps_chr = chars.get(&CHR_STEP_COUNT).cloned();
+                        let tx2 = tx.clone();
+                        tokio::spawn(async move {
+                            if let Some(chr) = fw_chr {
+                                if let Ok(data) = chr.read().await {
+                                    if let Ok(fw) = String::from_utf8(data) {
+                                        let _ = tx2.send(BleEvent::FirmwareVersion(fw)).await;
+                                    }
+                                }
+                            }
+                            if let Some(chr) = bat_chr {
+                                if let Ok(data) = chr.read().await {
+                                    if let Some(&v) = data.first() {
+                                        let _ = tx2.send(BleEvent::BatteryLevel(v)).await;
+                                    }
+                                }
+                            }
+                            if let Some(chr) = hr_chr {
+                                if let Ok(data) = chr.read().await {
+                                    if let Some(&v) = data.get(1) {
+                                        let _ = tx2.send(BleEvent::HeartRate(v)).await;
+                                    }
+                                }
+                            }
+                            if let Some(chr) = steps_chr {
+                                if let Ok(data) = chr.read().await {
+                                    if let Ok(bytes) = <[u8; 4]>::try_from(data.as_slice()) {
+                                        let _ = tx2.send(BleEvent::StepCount(u32::from_le_bytes(bytes))).await;
+                                    }
+                                }
+                            }
+                        });
                     }
                     BleCommand::Shutdown => {
                         log::info!("Shutdown requested while connected to {addr}");

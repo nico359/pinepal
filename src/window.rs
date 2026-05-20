@@ -91,7 +91,29 @@ impl PinepalWindow {
             .build()
     }
 
-    pub fn init_ble(&self, ble: BleHandle, mut event_rx: tokio::sync::mpsc::Receiver<BleEvent>) {
+    pub fn init_ble(&self, ble: BleHandle, event_rx: tokio::sync::mpsc::Receiver<BleEvent>) {
+        self.init_ble_inner(ble, event_rx, None);
+    }
+
+    /// Take over an existing BLE connection from the background service.
+    /// If `connected_firmware` is `Some`, the watch is already connected and the
+    /// dashboard is shown immediately without sending a Connect or StartScan command.
+    /// If `None`, falls back to the normal auto-connect / scan logic.
+    pub fn init_ble_takeover(
+        &self,
+        ble: BleHandle,
+        event_rx: tokio::sync::mpsc::Receiver<BleEvent>,
+        connected_firmware: Option<String>,
+    ) {
+        self.init_ble_inner(ble, event_rx, connected_firmware);
+    }
+
+    fn init_ble_inner(
+        &self,
+        ble: BleHandle,
+        mut event_rx: tokio::sync::mpsc::Receiver<BleEvent>,
+        connected_firmware: Option<String>,
+    ) {
         let imp = self.imp();
         imp.ble_handle.replace(Some(ble.clone()));
 
@@ -117,20 +139,28 @@ impl PinepalWindow {
             ble_for_cancel.send(BleCommand::Disconnect);
         });
 
-        // Start scanning or auto-connect to last known watch
-        let settings = gio::Settings::new("io.github.nico359.pinepal");
-        let saved_addr = settings.string("auto-connect-address");
-        if saved_addr.is_empty() {
-            ble.send(BleCommand::StartScan);
+        if let Some(ref fw) = connected_firmware {
+            // Taking over a connected service — show dashboard immediately,
+            // then ask the BLE manager to re-send current characteristic values.
+            log::info!("Taking over service connection, showing dashboard");
+            self.show_dashboard(fw);
+            ble.send(BleCommand::RequestUpdate);
         } else {
-            match saved_addr.parse::<Address>() {
-                Ok(addr) => {
-                    log::info!("Auto-connecting to last known watch {addr}");
-                    ble.send(BleCommand::Connect(addr));
-                }
-                Err(e) => {
-                    log::warn!("Saved address '{saved_addr}' is invalid ({e}), scanning instead");
-                    ble.send(BleCommand::StartScan);
+            // Start scanning or auto-connect to last known watch
+            let settings = gio::Settings::new("io.github.nico359.pinepal");
+            let saved_addr = settings.string("auto-connect-address");
+            if saved_addr.is_empty() {
+                ble.send(BleCommand::StartScan);
+            } else {
+                match saved_addr.parse::<Address>() {
+                    Ok(addr) => {
+                        log::info!("Auto-connecting to last known watch {addr}");
+                        ble.send(BleCommand::Connect(addr));
+                    }
+                    Err(e) => {
+                        log::warn!("Saved address '{saved_addr}' is invalid ({e}), scanning instead");
+                        ble.send(BleCommand::StartScan);
+                    }
                 }
             }
         }
@@ -178,7 +208,14 @@ impl PinepalWindow {
             }
             BleEvent::Disconnected { reason } => {
                 log::info!("Disconnected: {reason}");
-                self.show_devices();
+                // Only start a new scan for user-initiated disconnects.  For an
+                // unexpected loss of connection the BLE manager's own reconnect
+                // loop is already running — sending StartScan here would cancel it.
+                if reason.starts_with("User") || reason.starts_with("Switching") {
+                    self.show_devices();
+                } else {
+                    self.show_devices_no_scan();
+                }
             }
             BleEvent::BatteryLevel(level) => {
                 if let Some(ref dash) = *imp.dashboard_page.borrow() {
@@ -266,6 +303,18 @@ impl PinepalWindow {
         if let Some(ref ble) = *imp.ble_handle.borrow() {
             ble.send(BleCommand::StartScan);
         }
+    }
+
+    /// Navigate back to the devices page WITHOUT starting a new scan.
+    /// Used when the connection was lost unexpectedly — the BLE manager's own
+    /// reconnect loop is already running and must not be interrupted.
+    fn show_devices_no_scan(&self) {
+        let imp = self.imp();
+        imp.dashboard_page.replace(None);
+        imp.back_button.set_visible(false);
+        imp.navigation_view.pop_to_tag("devices");
+        imp.devices_page.clear_devices();
+        // No BleCommand::StartScan — let the reconnect loop do its job.
     }
 
     fn setup_back_button(&self) {

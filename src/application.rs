@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use crate::ble_manager::{self, BleCommand, BleHandle};
+use crate::ble_manager::{self, BleCommand, BleEvent, BleHandle};
 use crate::config::VERSION;
 use crate::notifications;
 use crate::PinepalWindow;
@@ -21,8 +21,12 @@ mod imp {
     pub struct PinepalApplication {
         pub tokio_rt: OnceCell<tokio::runtime::Runtime>,
         /// BLE handle when running as a headless D-Bus service (autostart mode).
-        /// Taken and shut down when the user opens the window.
         pub service_ble: RefCell<Option<BleHandle>>,
+        /// Event receiver for the service BLE — drained by a timer in service mode,
+        /// then taken and handed to the window when the GUI is opened.
+        pub service_event_rx: RefCell<Option<tokio::sync::mpsc::Receiver<BleEvent>>>,
+        /// Firmware of the last watch connected in service mode, cleared on disconnect.
+        pub service_connected_fw: RefCell<Option<String>>,
         /// Hold guard that keeps the app alive while running as a background service.
         pub service_hold: RefCell<Option<gio::ApplicationHoldGuard>>,
     }
@@ -77,28 +81,47 @@ mod imp {
                 let rt = application.imp().tokio_rt.get()
                     .expect("tokio runtime initialised in startup");
 
-                // If there was a background-service BLE running, tear it down so
-                // the window can own a fresh connection with its own event channel.
-                if let Some(ble) = application.imp().service_ble.borrow_mut().take() {
-                    log::info!("Transitioning from background service to foreground window");
-                    ble.send(BleCommand::Shutdown);
-                }
-                // Release the background hold so window lifetime governs app lifetime
-                application.imp().service_hold.borrow_mut().take();
+                let imp = application.imp();
 
-                let (ble_handle, event_rx) = ble_manager::spawn(rt);
+                // Try to take over the existing service connection seamlessly.
+                // If the service BLE and its event channel are both available, reuse
+                // them so the watch stays connected while the window opens.
+                let service_ble = imp.service_ble.borrow_mut().take();
+                let service_rx  = imp.service_event_rx.borrow_mut().take();
+                let service_fw  = imp.service_connected_fw.borrow().clone();
+                imp.service_hold.borrow_mut().take();
 
-                // Notification forwarding: bridge GSettings to an AtomicBool
-                let settings = gio::Settings::new("io.github.nico359.pinepal");
-                let notif_enabled = Arc::new(AtomicBool::new(settings.boolean("forward-notifications")));
-                let notif_flag = notif_enabled.clone();
-                settings.connect_changed(Some("forward-notifications"), move |s, _| {
-                    notif_flag.store(s.boolean("forward-notifications"), Ordering::Relaxed);
-                });
-                notifications::spawn_notification_forwarder(rt, ble_handle.clone(), notif_enabled);
+                let (ble_handle, event_rx, takeover_fw) =
+                    if let (Some(ble), Some(rx)) = (service_ble, service_rx) {
+                        log::info!("Opening window — reusing existing service BLE connection");
+                        // Notification forwarder is already running from start_background_service.
+                        (ble, rx, service_fw)
+                    } else {
+                        // No service running — spawn a fresh BLE stack.
+                        let (ble, rx) = ble_manager::spawn(rt);
+
+                        // Notification forwarding: bridge GSettings to an AtomicBool
+                        let settings = gio::Settings::new("io.github.nico359.pinepal");
+                        let notif_enabled = Arc::new(AtomicBool::new(
+                            settings.boolean("forward-notifications"),
+                        ));
+                        let notif_flag = notif_enabled.clone();
+                        settings.connect_changed(Some("forward-notifications"), move |s, _| {
+                            notif_flag.store(
+                                s.boolean("forward-notifications"),
+                                Ordering::Relaxed,
+                            );
+                        });
+                        notifications::spawn_notification_forwarder(
+                            rt,
+                            ble.clone(),
+                            notif_enabled,
+                        );
+                        (ble, rx, None)
+                    };
 
                 let window = PinepalWindow::new(&*application);
-                window.init_ble(ble_handle, event_rx);
+                window.init_ble_takeover(ble_handle, event_rx, takeover_fw);
                 window.upcast()
             });
 
@@ -152,7 +175,7 @@ impl PinepalApplication {
         let imp = self.imp();
         let rt = imp.tokio_rt.get().expect("tokio runtime initialised in startup");
 
-        let (ble_handle, mut event_rx) = ble_manager::spawn(rt);
+        let (ble_handle, event_rx) = ble_manager::spawn(rt);
 
         // Notification forwarding
         let settings = gio::Settings::new("io.github.nico359.pinepal");
@@ -172,13 +195,37 @@ impl PinepalApplication {
             }
         }
 
-        // Store for clean handover when the user opens the window
+        // Store handle and event channel for seamless handover to window.
         *imp.service_ble.borrow_mut() = Some(ble_handle);
+        *imp.service_event_rx.borrow_mut() = Some(event_rx);
 
-        // Drain BLE events — no UI to process them, but the channel must not fill up
+        // Drain BLE events in the background, tracking connected state so
+        // the window can show the dashboard immediately on takeover.
+        // The timer stops itself once the event_rx is taken by the window.
+        let app_weak = self.downgrade();
         glib::timeout_add_local(Duration::from_millis(50), move || {
-            while event_rx.try_recv().is_ok() {}
-            glib::ControlFlow::Continue
+            let Some(app) = app_weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let imp = app.imp();
+            let mut rx_opt = imp.service_event_rx.borrow_mut();
+            match *rx_opt {
+                None => glib::ControlFlow::Break, // taken by window — stop timer
+                Some(ref mut rx) => {
+                    while let Ok(event) = rx.try_recv() {
+                        match event {
+                            BleEvent::Connected { ref firmware, .. } => {
+                                *imp.service_connected_fw.borrow_mut() = Some(firmware.clone());
+                            }
+                            BleEvent::Disconnected { .. } => {
+                                *imp.service_connected_fw.borrow_mut() = None;
+                            }
+                            _ => {}
+                        }
+                    }
+                    glib::ControlFlow::Continue
+                }
+            }
         });
     }
 
@@ -194,6 +241,8 @@ impl PinepalApplication {
         if let Some(ble) = self.imp().service_ble.borrow_mut().take() {
             ble.send(BleCommand::Shutdown);
         }
+        self.imp().service_event_rx.borrow_mut().take();
+        self.imp().service_connected_fw.borrow_mut().take();
 
         self.quit();
     }
