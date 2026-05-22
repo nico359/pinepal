@@ -37,6 +37,15 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.1" date="2026-05-22">
+      <description translate="no">
+        <p>Handle Bluetooth turning off properly.</p>
+        <ul>
+          <li>Turning off Bluetooth while a connection is active does not break the reconnect logic anymore</li>
+          <li>The app now sleeps when Bluetooth is off and attempts reconnecting as soon as it is turned back on</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-05-20">
       <description translate="no">
         <p>Mostly QOL improvements.</p>
