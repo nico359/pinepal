@@ -84,6 +84,7 @@ async fn wait_for_bluetooth_on(
     adapter: &Adapter,
     tx: &mpsc::Sender<BleEvent>,
     rx: &mut mpsc::Receiver<BleCommand>,
+    emit_ready: bool,
 ) -> bool {
     if adapter.is_powered().await.unwrap_or(true) {
         return true;
@@ -102,7 +103,9 @@ async fn wait_for_bluetooth_on(
                 match adapter.is_powered().await {
                     Ok(true) => {
                         log::info!("Bluetooth turned on");
-                        let _ = tx.send(BleEvent::BluetoothReady).await;
+                        if emit_ready {
+                            let _ = tx.send(BleEvent::BluetoothReady).await;
+                        }
                         return true;
                     }
                     Ok(false) => {}
@@ -119,7 +122,9 @@ async fn wait_for_bluetooth_on(
                 match event {
                     Some(AdapterEvent::PropertyChanged(AdapterProperty::Powered(true))) => {
                         log::info!("Bluetooth turned on — resuming");
-                        let _ = tx.send(BleEvent::BluetoothReady).await;
+                        if emit_ready {
+                            let _ = tx.send(BleEvent::BluetoothReady).await;
+                        }
                         return true;
                     }
                     None => {
@@ -232,7 +237,7 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
     };
 
     // Wait for Bluetooth to be powered on before proceeding.
-    if !wait_for_bluetooth_on(&adapter, &tx, &mut rx).await {
+    if !wait_for_bluetooth_on(&adapter, &tx, &mut rx, true).await {
         return; // shutdown requested while waiting
     }
     log::info!("Adapter is powered on");
@@ -313,7 +318,8 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
             }
 
             // If Bluetooth was turned off, wait for it to come back before connecting.
-            if !wait_for_bluetooth_on(&adapter, &tx, &mut rx).await {
+            // Don't emit BluetoothReady — the Reconnecting event below handles the UI.
+            if !wait_for_bluetooth_on(&adapter, &tx, &mut rx, false).await {
                 return;
             }
 

@@ -249,6 +249,10 @@ impl PinepalWindow {
             }
             BleEvent::BluetoothOff => {
                 log::warn!("Bluetooth is off");
+                // Navigate away from the dashboard (if shown) so the user sees
+                // the "Bluetooth is Off" status. Don't send StartScan — the BLE
+                // manager's reconnect loop will pick up once BT comes back.
+                self.show_devices_no_scan();
                 imp.devices_page.set_bluetooth_off();
             }
             BleEvent::BluetoothReady => {
