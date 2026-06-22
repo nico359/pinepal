@@ -351,6 +351,13 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                     if e.to_string().contains("not present or removed") {
                         needs_rescan = true;
                     }
+                    // ponytail: BlueZ GATT cache poisoning — remove stale device object
+                    // so the next scan+connect gets a fresh service discovery.
+                    if e.to_string().contains("No characteristics found") {
+                        log::info!("Removing stale device object for {addr} to clear GATT cache");
+                        let _ = adapter.remove_device(addr).await;
+                        needs_rescan = true;
+                    }
                     attempts += 1;
                 }
             }
