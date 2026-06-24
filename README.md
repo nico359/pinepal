@@ -20,6 +20,15 @@ Companion app for [PineTime](https://www.pine64.org/pinetime/) smartwatches runn
 - Accepting or declining calls (if that is even possible)
 - Synchronising time of the watch on connect
 
+## Screenshots
+
+<div style="display: flex; flex-wrap: wrap; gap: 20px;">
+  <img src="data/dashboard.png" width="500" style="flex: 1; min-width: 250px;" />
+  <img src="data/searching.png" width="500" style="flex: 1; min-width: 250px;" />
+  <img src="data/bluetoothdisabled.png" width="500" style="flex: 1; min-width: 250px;" />
+  <img src="data/mobile.png" width="160" style="flex: 1;" />
+</div>
+
 ## Credits
 
 Based on the work of [Watchmate](https://github.com/azymohliad/watchmate) by Andrii Zymohliad.
