@@ -32,11 +32,39 @@
     <control>pointing</control>
   </supports>
 
+  <screenshots>
+        <screenshot type="default">
+            <caption>Dashboard</caption>
+            <image>https://raw.githubusercontent.com/nico359/pinepal/refs/heads/main/data/dashboard.png</image>
+        </screenshot>
+        <screenshot>
+            <caption>Searching</caption>
+            <image>https://raw.githubusercontent.com/nico359/pinepal/refs/heads/main/data/searching.png</image>
+        </screenshot>
+        <screenshot>
+            <caption>Bluetooth disabled</caption>
+            <image>https://raw.githubusercontent.com/nico359/pinepal/refs/heads/main/data/bluetoothdisabled.png</image>
+        </screenshot>
+        <screenshot>
+            <caption>Mobile</caption>
+            <image>https://raw.githubusercontent.com/nico359/loci/refs/heads/main/data/mobile.png</image>
+        </screenshot>
+    </screenshots>
+
   <translation type="gettext">pinepal</translation>
   <launchable type="desktop-id">io.github.nico359.pinepal.desktop</launchable>
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.3.2" date="2026-06-24">
+      <description translate="no">
+        <p>Fixed another Bluetooth related bug</p>
+        <ul>
+          <li>The watch disonnected uncleanly sometimes (stale cache) which resulted in buggy or no reconnection</li>
+          <li>The app triggers a proper reconnection now so this should not happen anymore</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-05-22">
       <description translate="no">
         <p>Handle Bluetooth turning off properly.</p>
