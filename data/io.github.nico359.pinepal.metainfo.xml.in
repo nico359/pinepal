@@ -47,7 +47,7 @@
         </screenshot>
         <screenshot>
             <caption>Mobile</caption>
-            <image>https://raw.githubusercontent.com/nico359/loci/refs/heads/main/data/mobile.png</image>
+            <image>https://raw.githubusercontent.com/nico359/pinepal/refs/heads/main/data/mobile.png</image>
         </screenshot>
     </screenshots>
 
@@ -56,6 +56,14 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.4.0" date="2026-06-30">
+      <description translate="no">
+        <p>Music controls</p>
+        <ul>
+          <li>App can pause, skip, etc. now via MPRIS</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.2" date="2026-06-24">
       <description translate="no">
         <p>Fixed another Bluetooth related bug</p>
