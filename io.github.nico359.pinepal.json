@@ -15,7 +15,8 @@
         "--allow=bluetooth",
         "--socket=session-bus",
         "--system-talk-name=org.bluez",
-        "--talk-name=org.freedesktop.Notifications"
+        "--talk-name=org.freedesktop.Notifications",
+        "--talk-name=org.mpris.MediaPlayer2.*"
     ],
     "build-options" : {
         "append-path" : "/usr/lib/sdk/rust-stable/bin",

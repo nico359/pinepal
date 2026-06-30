@@ -88,6 +88,30 @@
                   </object>
                 </child>
 
+                <!-- Media Player -->
+                <child>
+                  <object class="AdwPreferencesGroup" id="media_player_group">
+                    <property name="title" translatable="yes">Media Player</property>
+                    <child>
+                      <object class="AdwActionRow" id="media_player_row">
+                        <property name="title" translatable="yes">Player</property>
+                        <property name="subtitle" translatable="yes">No player available</property>
+                        <child type="prefix">
+                          <object class="GtkImage">
+                            <property name="icon-name">audio-speakers-symbolic</property>
+                          </object>
+                        </child>
+                        <child type="suffix">
+                          <object class="GtkDropDown" id="media_player_dropdown">
+                            <property name="valign">center</property>
+                            <property name="sensitive">false</property>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+
                 <!-- Step history chart -->
                 <child>
                   <object class="AdwPreferencesGroup">

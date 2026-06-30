@@ -35,7 +35,14 @@ mod imp {
         pub step_chart: TemplateChild<gtk::DrawingArea>,
         #[template_child]
         pub disconnect_button: TemplateChild<gtk::Button>,
+        #[template_child]
+        pub media_player_group: TemplateChild<adw::PreferencesGroup>,
+        #[template_child]
+        pub media_player_row: TemplateChild<adw::ActionRow>,
+        #[template_child]
+        pub media_player_dropdown: TemplateChild<gtk::DropDown>,
 
+        pub player_names: RefCell<gtk::StringList>,
         pub step_db: RefCell<Option<Rc<StepDb>>>,
         pub range_days: Cell<u32>,
     }
@@ -53,6 +60,10 @@ mod imp {
                 range_all: Default::default(),
                 step_chart: Default::default(),
                 disconnect_button: Default::default(),
+                media_player_group: Default::default(),
+                media_player_row: Default::default(),
+                media_player_dropdown: Default::default(),
+                player_names: RefCell::new(gtk::StringList::new(&[] as &[&str])),
                 step_db: RefCell::new(None),
                 range_days: Cell::new(7),
             }
@@ -178,6 +189,42 @@ impl PinepalDashboardPage {
 
     pub fn connect_disconnect<F: Fn() + 'static>(&self, f: F) {
         self.imp().disconnect_button.connect_clicked(move |_| f());
+    }
+
+    pub fn add_media_player(&self, name: &str) {
+        let imp = self.imp();
+        let names = imp.player_names.borrow();
+        names.append(name);
+        if names.n_items() == 1 {
+            imp.media_player_row.set_subtitle("Select a player");
+            imp.media_player_dropdown.set_sensitive(true);
+            imp.media_player_dropdown.set_model(Some(&*names));
+        }
+    }
+
+    pub fn remove_media_player(&self, name: &str) {
+        let imp = self.imp();
+        let names = imp.player_names.borrow();
+        for i in 0..names.n_items() {
+            if let Some(s) = names.string(i) {
+                if s == name {
+                    names.remove(i);
+                    break;
+                }
+            }
+        }
+        if names.n_items() == 0 {
+            imp.media_player_row.set_subtitle("No player available");
+            imp.media_player_dropdown.set_sensitive(false);
+            imp.media_player_dropdown.set_model(Some(&*names));
+        }
+    }
+
+    pub fn connect_media_player_selected<F: Fn(usize) + 'static>(&self, f: F) {
+        let dropdown = self.imp().media_player_dropdown.clone();
+        dropdown.connect_selected_notify(move |d| {
+            f(d.selected() as usize);
+        });
     }
 }
 

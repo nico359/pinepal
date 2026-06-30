@@ -26,6 +26,18 @@ const CHR_NEW_ALERT: Uuid = uuid::uuid!("00002a46-0000-1000-8000-00805f9b34fb");
 // InfiniTime custom UUIDs
 const CHR_STEP_COUNT: Uuid = uuid::uuid!("00030001-78fc-48fe-8e23-433b3a1942d0");
 
+// InfiniTime Media Player service UUIDs
+const CHR_MP_EVENTS: Uuid = uuid::uuid!("00000001-78fc-48fe-8e23-433b3a1942d0");
+const CHR_MP_STATUS: Uuid = uuid::uuid!("00000002-78fc-48fe-8e23-433b3a1942d0");
+const CHR_MP_ARTIST: Uuid = uuid::uuid!("00000003-78fc-48fe-8e23-433b3a1942d0");
+const CHR_MP_TRACK: Uuid = uuid::uuid!("00000004-78fc-48fe-8e23-433b3a1942d0");
+const CHR_MP_ALBUM: Uuid = uuid::uuid!("00000005-78fc-48fe-8e23-433b3a1942d0");
+const CHR_MP_POSITION: Uuid = uuid::uuid!("00000006-78fc-48fe-8e23-433b3a1942d0");
+const CHR_MP_DURATION: Uuid = uuid::uuid!("00000007-78fc-48fe-8e23-433b3a1942d0");
+const CHR_MP_SPEED: Uuid = uuid::uuid!("0000000a-78fc-48fe-8e23-433b3a1942d0");
+const CHR_MP_REPEAT: Uuid = uuid::uuid!("0000000b-78fc-48fe-8e23-433b3a1942d0");
+const CHR_MP_SHUFFLE: Uuid = uuid::uuid!("0000000c-78fc-48fe-8e23-433b3a1942d0");
+
 /// Starts a local GATT server advertising the Current Time Service (CTS).
 /// InfiniTime reads this characteristic on connect to sync its clock.
 /// The returned handle must be kept alive to keep the service registered.
@@ -171,6 +183,48 @@ pub enum BleEvent {
         attempt: u32,
         delay_secs: u64,
     },
+    MediaPlayerEvent(MediaPlayerEvent),
+}
+
+/// Media player button event from the watch.
+#[derive(Debug, Clone)]
+pub enum MediaPlayerEvent {
+    AppOpened,
+    Play,
+    Pause,
+    Next,
+    Previous,
+    VolumeUp,
+    VolumeDown,
+}
+
+impl MediaPlayerEvent {
+    pub fn from_raw(v: u8) -> Option<Self> {
+        match v {
+            0xe0 => Some(MediaPlayerEvent::AppOpened),
+            0x00 => Some(MediaPlayerEvent::Play),
+            0x01 => Some(MediaPlayerEvent::Pause),
+            0x03 => Some(MediaPlayerEvent::Next),
+            0x04 => Some(MediaPlayerEvent::Previous),
+            0x05 => Some(MediaPlayerEvent::VolumeUp),
+            0x06 => Some(MediaPlayerEvent::VolumeDown),
+            _ => None,
+        }
+    }
+}
+
+/// Media track info sent to the watch's media player service.
+#[derive(Debug, Default, Clone)]
+pub struct MpInfo {
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub track: Option<String>,
+    pub playing: Option<bool>,
+    pub position: Option<u32>,
+    pub duration: Option<u32>,
+    pub speed: Option<f32>,
+    pub repeat: Option<bool>,
+    pub shuffle: Option<bool>,
 }
 
 /// Commands sent from UI to BLE manager.
@@ -184,6 +238,8 @@ pub enum BleCommand {
     /// Used when the GUI opens and takes over an already-connected service session.
     RequestUpdate,
     Shutdown,
+    /// Send media player info to the watch.
+    SendMpInfo(MpInfo),
 }
 
 /// Handle for sending commands to the BLE task from the UI (glib) thread.
@@ -577,6 +633,15 @@ async fn do_connect(
             }
         } else { None };
 
+    // Media player event stream (button presses from the watch)
+    let mut mp_event_stream: Option<std::pin::Pin<Box<dyn futures::Stream<Item = Vec<u8>> + Send>>> =
+        if let Some(chr) = chars.get(&CHR_MP_EVENTS) {
+            match chr.notify().await {
+                Ok(s) => { log::debug!("Media player events subscribed"); Some(Box::pin(s) as _) }
+                Err(e) => { log::debug!("Media player events not available: {e}"); None }
+            }
+        } else { None };
+
     let alert_chr = chars.get(&CHR_NEW_ALERT).cloned();
 
     log::debug!("Subscribing to device property events on {addr}");
@@ -603,6 +668,14 @@ async fn do_connect(
             val = next_or_pending(&mut step_stream) => {
                 if let Ok(bytes) = <[u8; 4]>::try_from(val.as_slice()) {
                     let _ = tx.send(BleEvent::StepCount(u32::from_le_bytes(bytes))).await;
+                }
+            }
+            val = next_or_pending(&mut mp_event_stream) => {
+                if let Some(&v) = val.first() {
+                    if let Some(evt) = MediaPlayerEvent::from_raw(v) {
+                        log::debug!("Media player event: {:?}", evt);
+                        let _ = tx.send(BleEvent::MediaPlayerEvent(evt)).await;
+                    }
                 }
             }
             evt = prop_stream.next() => {
@@ -654,6 +727,9 @@ async fn do_connect(
                                 log::warn!("Alert write failed: {e}");
                             }
                         }
+                    }
+                    BleCommand::SendMpInfo(info) => {
+                        write_mp_info(&chars, &info).await;
                     }
                     BleCommand::RequestUpdate => {
                         log::info!("RequestUpdate: re-reading all characteristics for {addr}");
@@ -776,4 +852,43 @@ fn build_alert_message(category: u8, title: &str, body: &str) -> Vec<u8> {
     msg.push(0x00);
     msg.extend_from_slice(body.as_bytes());
     msg
+}
+
+async fn write_mp_info(
+    chars: &HashMap<Uuid, bluer::gatt::remote::Characteristic>,
+    info: &MpInfo,
+) {
+    if let (Some(ref chr), Some(ref val)) = (chars.get(&CHR_MP_ARTIST), &info.artist) {
+        if let Err(e) = chr.write(val.as_bytes()).await { log::warn!("MP artist write failed: {e}"); }
+    }
+    if let (Some(ref chr), Some(ref val)) = (chars.get(&CHR_MP_ALBUM), &info.album) {
+        if let Err(e) = chr.write(val.as_bytes()).await { log::warn!("MP album write failed: {e}"); }
+    }
+    if let (Some(ref chr), Some(ref val)) = (chars.get(&CHR_MP_TRACK), &info.track) {
+        if let Err(e) = chr.write(val.as_bytes()).await { log::warn!("MP track write failed: {e}"); }
+    }
+    if let (Some(ref chr), Some(playing)) = (chars.get(&CHR_MP_STATUS), info.playing) {
+        let val = [u8::from(playing)];
+        if let Err(e) = chr.write(&val).await { log::warn!("MP status write failed: {e}"); }
+    }
+    if let (Some(ref chr), Some(pos)) = (chars.get(&CHR_MP_POSITION), info.position) {
+        let val = pos.to_be_bytes();
+        if let Err(e) = chr.write(&val).await { log::warn!("MP position write failed: {e}"); }
+    }
+    if let (Some(ref chr), Some(dur)) = (chars.get(&CHR_MP_DURATION), info.duration) {
+        let val = dur.to_be_bytes();
+        if let Err(e) = chr.write(&val).await { log::warn!("MP duration write failed: {e}"); }
+    }
+    if let (Some(ref chr), Some(speed)) = (chars.get(&CHR_MP_SPEED), info.speed) {
+        let val = ((speed * 100.0) as u32).to_be_bytes();
+        if let Err(e) = chr.write(&val).await { log::warn!("MP speed write failed: {e}"); }
+    }
+    if let (Some(ref chr), Some(repeat)) = (chars.get(&CHR_MP_REPEAT), info.repeat) {
+        let val = [u8::from(repeat)];
+        if let Err(e) = chr.write(&val).await { log::warn!("MP repeat write failed: {e}"); }
+    }
+    if let (Some(ref chr), Some(shuffle)) = (chars.get(&CHR_MP_SHUFFLE), info.shuffle) {
+        let val = [u8::from(shuffle)];
+        if let Err(e) = chr.write(&val).await { log::warn!("MP shuffle write failed: {e}"); }
+    }
 }

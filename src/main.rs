@@ -8,6 +8,7 @@ mod dashboard_page;
 mod devices_page;
 mod log_collector;
 mod log_viewer;
+mod mpris;
 mod notifications;
 mod preferences_dialog;
 mod step_chart;

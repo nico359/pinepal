@@ -121,6 +121,7 @@ mod imp {
                     };
 
                 let window = PinepalWindow::new(&*application);
+                window.set_tokio_rt(rt.handle().clone());
                 window.init_ble_takeover(ble_handle, event_rx, takeover_fw);
                 window.upcast()
             });

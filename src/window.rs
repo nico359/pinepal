@@ -2,13 +2,15 @@
 
 use adw::prelude::*;
 use adw::subclass::prelude::*;
+use futures::StreamExt;
 use gtk::{gio, glib};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ble_manager::{BleCommand, BleEvent, BleHandle};
+use crate::ble_manager::{BleCommand, BleEvent, BleHandle, MediaPlayerEvent};
 use crate::dashboard_page::PinepalDashboardPage;
 use crate::devices_page::PinepalDevicesPage;
+use crate::mpris;
 use crate::step_db::StepDb;
 use bluer::Address;
 
@@ -30,6 +32,11 @@ mod imp {
         pub dashboard_page: RefCell<Option<PinepalDashboardPage>>,
         pub ble_handle: RefCell<Option<BleHandle>>,
         pub step_db: RefCell<Option<Rc<StepDb>>>,
+        pub tokio_rt: RefCell<Option<tokio::runtime::Handle>>,
+        pub mp_event_tx: RefCell<Option<tokio::sync::mpsc::Sender<MediaPlayerEvent>>>,
+        pub mpris_watcher: RefCell<Option<tokio::task::JoinHandle<()>>>,
+        pub mpris_control: RefCell<Option<tokio::task::JoinHandle<()>>>,
+        pub mpris_action_rx: RefCell<Option<tokio::sync::mpsc::Receiver<mpris::PlayersListEvent>>>,
     }
 
     impl Default for PinepalWindow {
@@ -42,6 +49,11 @@ mod imp {
                 dashboard_page: RefCell::new(None),
                 ble_handle: RefCell::new(None),
                 step_db: RefCell::new(None),
+                tokio_rt: RefCell::new(None),
+                mp_event_tx: RefCell::new(None),
+                mpris_watcher: RefCell::new(None),
+                mpris_control: RefCell::new(None),
+                mpris_action_rx: RefCell::new(None),
             }
         }
     }
@@ -89,6 +101,10 @@ impl PinepalWindow {
         glib::Object::builder()
             .property("application", application)
             .build()
+    }
+
+    pub fn set_tokio_rt(&self, rt: tokio::runtime::Handle) {
+        self.imp().tokio_rt.replace(Some(rt));
     }
 
     pub fn init_ble(&self, ble: BleHandle, event_rx: tokio::sync::mpsc::Receiver<BleEvent>) {
@@ -165,11 +181,18 @@ impl PinepalWindow {
             }
         }
 
-        // Poll BLE events on glib main loop
+        // Poll BLE events and MPRIS actions on glib main loop
         let window = self.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
             while let Ok(event) = event_rx.try_recv() {
                 window.handle_ble_event(event);
+            }
+            // Poll MPRIS player list changes
+            let imp = window.imp();
+            if let Some(ref mut rx) = *imp.mpris_action_rx.borrow_mut() {
+                while let Ok(action) = rx.try_recv() {
+                    window.handle_mpris_action(action);
+                }
             }
             glib::ControlFlow::Continue
         });
@@ -263,6 +286,11 @@ impl PinepalWindow {
             BleEvent::Reconnecting { attempt, delay_secs } => {
                 imp.devices_page.set_reconnecting(attempt, delay_secs);
             }
+            BleEvent::MediaPlayerEvent(event) => {
+                if let Some(ref tx) = *imp.mp_event_tx.borrow() {
+                    let _ = tx.try_send(event);
+                }
+            }
         }
     }
 
@@ -278,10 +306,85 @@ impl PinepalWindow {
         }
 
         // Disconnect button
-        let ble = imp.ble_handle.borrow().clone();
+        let ble_for_disc = imp.ble_handle.borrow().clone();
         dashboard.connect_disconnect(move || {
-            if let Some(ref ble) = ble {
+            if let Some(ref ble) = ble_for_disc {
                 ble.send(BleCommand::Disconnect);
+            }
+        });
+
+        // ---- MPRIS media player setup ----
+
+        // Channel for forwarding watch media events to MPRIS control session
+        let (mp_event_tx, _mp_event_rx) = tokio::sync::mpsc::channel::<MediaPlayerEvent>(32);
+        imp.mp_event_tx.replace(Some(mp_event_tx));
+
+        // Channel for MPRIS player add/remove events (tokio -> glib)
+        let (mpris_tx, mpris_rx) = tokio::sync::mpsc::channel::<mpris::PlayersListEvent>(32);
+        imp.mpris_action_rx.replace(Some(mpris_rx));
+
+        // Spawn MPRIS player watcher on tokio
+        if let Some(ref rt) = *imp.tokio_rt.borrow() {
+            let watcher = rt.spawn(async move {
+                let conn = match zbus::Connection::session().await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::error!("MPRIS: failed to connect to session bus: {e}");
+                        return;
+                    }
+                };
+                let stream = match mpris::get_players_stream(&conn).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::error!("MPRIS: failed to get player stream: {e}");
+                        return;
+                    }
+                };
+                tokio::pin!(stream);
+                while let Some(event) = stream.next().await {
+                    if mpris_tx.send(event).await.is_err() {
+                        break; // channel closed
+                    }
+                }
+            });
+            imp.mpris_watcher.replace(Some(watcher));
+        }
+
+        // When user selects a player in the dropdown, start a control session
+        let ble_for_mp = imp.ble_handle.borrow().clone();
+        let window_for_mp = self.clone();
+        dashboard.connect_media_player_selected(move |index| {
+            let rt_handle = window_for_mp.imp().tokio_rt.borrow().clone();
+            if let (Some(ref rt), Some(ble)) = (rt_handle, ble_for_mp.clone()) {
+                let player_names = window_for_mp.imp()
+                    .dashboard_page.borrow().as_ref()
+                    .and_then(|d| {
+                        let names = d.imp().player_names.borrow();
+                        names.string(index as u32).map(|s| s.to_string())
+                    });
+
+                // Cancel previous control session
+                window_for_mp.abort_control_session();
+
+                if let Some(player_name) = player_names {
+                    // Create a new channel for this control session
+                    let (new_tx, new_rx) = tokio::sync::mpsc::channel::<MediaPlayerEvent>(32);
+                    window_for_mp.imp().mp_event_tx.replace(Some(new_tx));
+
+                    let task = rt.spawn(async move {
+                        let conn = match zbus::Connection::session().await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                log::error!("MPRIS control: session bus error: {e}");
+                                return;
+                            }
+                        };
+                        if let Err(e) = mpris::run_control_session(&conn, &player_name, ble, new_rx).await {
+                            log::error!("MPRIS control session error: {e}");
+                        }
+                    });
+                    window_for_mp.imp().mpris_control.replace(Some(task));
+                }
             }
         });
 
@@ -296,7 +399,34 @@ impl PinepalWindow {
         imp.back_button.set_visible(true);
     }
 
+    fn abort_control_session(&self) {
+        if let Some(handle) = self.imp().mpris_control.borrow_mut().take() {
+            handle.abort();
+            log::debug!("MPRIS control session aborted");
+        }
+    }
+
+    fn handle_mpris_action(&self, action: mpris::PlayersListEvent) {
+        if let Some(ref dash) = *self.imp().dashboard_page.borrow() {
+            match action {
+                mpris::PlayersListEvent::PlayerAdded(name) => dash.add_media_player(&name),
+                mpris::PlayersListEvent::PlayerRemoved(name) => dash.remove_media_player(&name),
+            }
+        }
+    }
+
+    fn stop_mpris_tasks(&self) {
+        self.abort_control_session();
+        if let Some(handle) = self.imp().mpris_watcher.borrow_mut().take() {
+            handle.abort();
+            log::debug!("MPRIS player watcher stopped");
+        }
+        self.imp().mp_event_tx.replace(None);
+        self.imp().mpris_action_rx.replace(None);
+    }
+
     fn show_devices(&self) {
+        self.stop_mpris_tasks();
         let imp = self.imp();
         imp.dashboard_page.replace(None);
         imp.back_button.set_visible(false);
@@ -313,6 +443,7 @@ impl PinepalWindow {
     /// Used when the connection was lost unexpectedly — the BLE manager's own
     /// reconnect loop is already running and must not be interrupted.
     fn show_devices_no_scan(&self) {
+        self.stop_mpris_tasks();
         let imp = self.imp();
         imp.dashboard_page.replace(None);
         imp.back_button.set_visible(false);
