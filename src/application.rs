@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::ble_manager::{self, BleCommand, BleEvent, BleHandle};
 use crate::config::VERSION;
+use crate::garmin_ble::{self, GarminCommand, GarminHandle};
 use crate::notifications;
 use crate::PinepalWindow;
 
@@ -29,6 +30,8 @@ mod imp {
         pub service_connected_fw: RefCell<Option<String>>,
         /// Hold guard that keeps the app alive while running as a background service.
         pub service_hold: RefCell<Option<gio::ApplicationHoldGuard>>,
+        /// Garmin BLE handle (for clean shutdown).
+        pub garmin_handle: RefCell<Option<GarminHandle>>,
     }
 
     #[glib::object_subclass]
@@ -91,17 +94,41 @@ mod imp {
                 let service_fw  = imp.service_connected_fw.borrow().clone();
                 imp.service_hold.borrow_mut().take();
 
-                let (ble_handle, event_rx, takeover_fw) =
+                let (ble_handle, event_rx, takeover_fw, garmin_for_window) =
                     if let (Some(ble), Some(rx)) = (service_ble, service_rx) {
                         log::info!("Opening window — reusing existing service BLE connection");
                         // Notification forwarder is already running from start_background_service.
-                        (ble, rx, service_fw)
+                        let garmin = imp.garmin_handle.borrow_mut().take();
+                        (ble, rx, service_fw, garmin)
                     } else {
                         // No service running — spawn a fresh BLE stack.
                         let (ble, rx) = ble_manager::spawn(rt);
 
-                        // Notification forwarding: bridge GSettings to an AtomicBool
+                        // Also spawn Garmin BLE manager
+                        let (garmin_handle, garmin_rx) = garmin_ble::spawn(rt);
+
+                        // Auto-connect Garmin if saved address exists, otherwise scan
                         let settings = gio::Settings::new("io.github.nico359.pinepal");
+                        let saved_garmin = settings.string("auto-connect-garmin-address");
+                        if saved_garmin.is_empty() {
+                            garmin_handle.send(GarminCommand::StartScan);
+                        } else {
+                            match saved_garmin.parse::<bluer::Address>() {
+                                Ok(addr) => {
+                                    log::info!("GUI: auto-connecting Garmin to {addr}");
+                                    garmin_handle.send(GarminCommand::Connect(addr));
+                                }
+                                Err(e) => {
+                                    log::warn!("Invalid saved Garmin address '{saved_garmin}' ({e}), scanning instead");
+                                    garmin_handle.send(GarminCommand::StartScan);
+                                }
+                            }
+                        }
+
+                        // Merge InfiniTime + Garmin event streams
+                        let merged_rx = merge_event_streams(rt, rx, garmin_rx);
+
+                        // Notification forwarding: bridge GSettings to an AtomicBool
                         let notif_enabled = Arc::new(AtomicBool::new(
                             settings.boolean("forward-notifications"),
                         ));
@@ -115,14 +142,18 @@ mod imp {
                         notifications::spawn_notification_forwarder(
                             rt,
                             ble.clone(),
+                            Some(garmin_handle.clone()),
                             notif_enabled,
                         );
-                        (ble, rx, None)
+                        (ble, merged_rx, None, Some(garmin_handle))
                     };
 
                 let window = PinepalWindow::new(&*application);
                 window.set_tokio_rt(rt.handle().clone());
                 window.init_ble_takeover(ble_handle, event_rx, takeover_fw);
+                if let Some(garmin) = garmin_for_window {
+                    window.set_garmin_handle(garmin);
+                }
                 window.upcast()
             });
 
@@ -177,6 +208,7 @@ impl PinepalApplication {
         let rt = imp.tokio_rt.get().expect("tokio runtime initialised in startup");
 
         let (ble_handle, event_rx) = ble_manager::spawn(rt);
+        let (garmin_handle, _garmin_rx) = garmin_ble::spawn(rt);
 
         // Notification forwarding
         let settings = gio::Settings::new("io.github.nico359.pinepal");
@@ -185,9 +217,9 @@ impl PinepalApplication {
         settings.connect_changed(Some("forward-notifications"), move |s, _| {
             notif_flag.store(s.boolean("forward-notifications"), Ordering::Relaxed);
         });
-        notifications::spawn_notification_forwarder(rt, ble_handle.clone(), notif_enabled);
+        notifications::spawn_notification_forwarder(rt, ble_handle.clone(), Some(garmin_handle.clone()), notif_enabled);
 
-        // Auto-connect to last known watch
+        // Auto-connect to last known watch (InfiniTime)
         let saved_addr = settings.string("auto-connect-address");
         if !saved_addr.is_empty() {
             if let Ok(addr) = saved_addr.parse::<bluer::Address>() {
@@ -196,9 +228,27 @@ impl PinepalApplication {
             }
         }
 
+        // Auto-connect to last known Garmin watch
+        let saved_garmin = settings.string("auto-connect-garmin-address");
+        if saved_garmin.is_empty() {
+            garmin_handle.send(GarminCommand::StartScan);
+        } else {
+            match saved_garmin.parse::<bluer::Address>() {
+                Ok(addr) => {
+                    log::info!("Background service: auto-connecting Garmin to {addr}");
+                    garmin_handle.send(GarminCommand::Connect(addr));
+                }
+                Err(e) => {
+                    log::warn!("Invalid saved Garmin address '{saved_garmin}' ({e}), scanning instead");
+                    garmin_handle.send(GarminCommand::StartScan);
+                }
+            }
+        }
+
         // Store handle and event channel for seamless handover to window.
         *imp.service_ble.borrow_mut() = Some(ble_handle);
         *imp.service_event_rx.borrow_mut() = Some(event_rx);
+        *imp.garmin_handle.borrow_mut() = Some(garmin_handle);
 
         // Drain BLE events in the background, tracking connected state so
         // the window can show the dashboard immediately on takeover.
@@ -242,6 +292,9 @@ impl PinepalApplication {
         if let Some(ble) = self.imp().service_ble.borrow_mut().take() {
             ble.send(BleCommand::Shutdown);
         }
+        if let Some(garmin) = self.imp().garmin_handle.borrow_mut().take() {
+            garmin.send(GarminCommand::Shutdown);
+        }
         self.imp().service_event_rx.borrow_mut().take();
         self.imp().service_connected_fw.borrow_mut().take();
 
@@ -281,5 +334,31 @@ impl PinepalApplication {
 
         about.present(Some(&window));
     }
+}
+
+/// Merge two BleEvent receivers into one. Events from both streams
+/// are forwarded to a single output channel.
+fn merge_event_streams(
+    rt: &tokio::runtime::Runtime,
+    mut rx_a: tokio::sync::mpsc::Receiver<BleEvent>,
+    mut rx_b: tokio::sync::mpsc::Receiver<BleEvent>,
+) -> tokio::sync::mpsc::Receiver<BleEvent> {
+    let (tx, merged_rx) = tokio::sync::mpsc::channel::<BleEvent>(64);
+    let tx2 = tx.clone();
+    rt.spawn(async move {
+        while let Some(event) = rx_a.recv().await {
+            if tx.send(event).await.is_err() {
+                break;
+            }
+        }
+    });
+    rt.spawn(async move {
+        while let Some(event) = rx_b.recv().await {
+            if tx2.send(event).await.is_err() {
+                break;
+            }
+        }
+    });
+    merged_rx
 }
 

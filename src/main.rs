@@ -3,9 +3,12 @@
 mod application;
 mod background_portal;
 mod ble_manager;
+mod cobs;
 mod config;
 mod dashboard_page;
 mod devices_page;
+mod garmin_ble;
+mod gfdi;
 mod log_collector;
 mod log_viewer;
 mod mpris;

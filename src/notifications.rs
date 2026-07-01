@@ -2,6 +2,7 @@
 // D-Bus notification monitor — watches for desktop notifications and forwards them to the watch.
 
 use crate::ble_manager::{BleCommand, BleHandle};
+use crate::garmin_ble::{GarminCommand, GarminHandle};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,10 +13,11 @@ use zbus::zvariant::{Type, Value};
 pub fn spawn_notification_forwarder(
     rt: &tokio::runtime::Runtime,
     ble: BleHandle,
+    garmin: Option<GarminHandle>,
     enabled: Arc<AtomicBool>,
 ) {
     rt.spawn(async move {
-        if let Err(e) = run_forwarder(ble, enabled).await {
+        if let Err(e) = run_forwarder(ble, garmin, enabled).await {
             log::error!("Notification forwarder error: {e}");
         }
     });
@@ -34,7 +36,7 @@ struct DesktopNotification<'s> {
     expire_timeout: i32,
 }
 
-async fn run_forwarder(ble: BleHandle, enabled: Arc<AtomicBool>) -> anyhow::Result<()> {
+async fn run_forwarder(ble: BleHandle, garmin: Option<GarminHandle>, enabled: Arc<AtomicBool>) -> anyhow::Result<()> {
     let conn = zbus::Connection::session().await?;
     let proxy = zbus::fdo::MonitoringProxy::builder(&conn)
         .destination("org.freedesktop.DBus")?
@@ -74,9 +76,15 @@ async fn run_forwarder(ble: BleHandle, enabled: Arc<AtomicBool>) -> anyhow::Resu
 
                 log::debug!("Forwarding notification: {title}");
                 ble.send(BleCommand::SendNotification {
-                    title,
+                    title: title.clone(),
                     body: notif.body.to_string(),
                 });
+                if let Some(ref garmin) = garmin {
+                    garmin.send(GarminCommand::SendNotification {
+                        title,
+                        body: notif.body.to_string(),
+                    });
+                }
             }
             Err(e) => {
                 log::debug!("Failed to parse notification: {e}");

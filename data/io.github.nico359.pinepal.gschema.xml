@@ -8,8 +8,13 @@
 		</key>
 		<key name="auto-connect-address" type="s">
 			<default>''</default>
-			<summary>Last connected device address</summary>
+			<summary>Last connected InfiniTime address</summary>
 			<description>Bluetooth address of the last connected InfiniTime device for automatic reconnection.</description>
+		</key>
+		<key name="auto-connect-garmin-address" type="s">
+			<default>''</default>
+			<summary>Last connected Garmin address</summary>
+			<description>Bluetooth address of the last connected Garmin watch for automatic reconnection.</description>
 		</key>
 		<key name="forward-notifications" type="b">
 			<default>true</default>

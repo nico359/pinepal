@@ -10,9 +10,11 @@ use std::rc::Rc;
 use crate::ble_manager::{BleCommand, BleEvent, BleHandle, MediaPlayerEvent};
 use crate::dashboard_page::PinepalDashboardPage;
 use crate::devices_page::PinepalDevicesPage;
+use crate::garmin_ble::{GarminCommand, GarminHandle};
 use crate::mpris;
 use crate::step_db::StepDb;
 use bluer::Address;
+use std::collections::HashSet;
 
 mod imp {
     use super::*;
@@ -37,6 +39,8 @@ mod imp {
         pub mpris_watcher: RefCell<Option<tokio::task::JoinHandle<()>>>,
         pub mpris_control: RefCell<Option<tokio::task::JoinHandle<()>>>,
         pub mpris_action_rx: RefCell<Option<tokio::sync::mpsc::Receiver<mpris::PlayersListEvent>>>,
+        pub garmin_handle: RefCell<Option<GarminHandle>>,
+        pub garmin_addrs: RefCell<HashSet<Address>>,
     }
 
     impl Default for PinepalWindow {
@@ -54,6 +58,8 @@ mod imp {
                 mpris_watcher: RefCell::new(None),
                 mpris_control: RefCell::new(None),
                 mpris_action_rx: RefCell::new(None),
+                garmin_handle: RefCell::new(None),
+                garmin_addrs: RefCell::new(HashSet::new()),
             }
         }
     }
@@ -107,6 +113,10 @@ impl PinepalWindow {
         self.imp().tokio_rt.replace(Some(rt));
     }
 
+    pub fn set_garmin_handle(&self, handle: GarminHandle) {
+        self.imp().garmin_handle.replace(Some(handle));
+    }
+
     pub fn init_ble(&self, ble: BleHandle, event_rx: tokio::sync::mpsc::Receiver<BleEvent>) {
         self.init_ble_inner(ble, event_rx, None);
     }
@@ -143,10 +153,18 @@ impl PinepalWindow {
         };
         imp.step_db.replace(Some(db.clone()));
 
-        // Setup devices page click handler
+        // Setup devices page click handler — routes to correct BLE manager
         let ble_for_devices = ble.clone();
+        let garmin_for_devices = imp.garmin_handle.borrow().clone();
+        let addrs = imp.garmin_addrs.clone();
         imp.devices_page.connect_device_activated(move |addr| {
-            ble_for_devices.send(BleCommand::Connect(addr));
+            if addrs.borrow().contains(&addr) {
+                if let Some(ref garmin) = garmin_for_devices {
+                    garmin.send(GarminCommand::Connect(addr));
+                }
+            } else {
+                ble_for_devices.send(BleCommand::Connect(addr));
+            }
         });
 
         // Cancel reconnect button
@@ -204,6 +222,9 @@ impl PinepalWindow {
         if let Some(ref ble) = *self.imp().ble_handle.borrow() {
             ble.send(BleCommand::Shutdown);
         }
+        if let Some(ref garmin) = *self.imp().garmin_handle.borrow() {
+            garmin.send(GarminCommand::Shutdown);
+        }
 
         self.close();
     }
@@ -217,12 +238,22 @@ impl PinepalWindow {
             }
             BleEvent::DeviceFound { address, name, .. } => {
                 imp.devices_page.add_device(address, &name);
+                // Track suspected Garmin addresses for routing Connect commands
+                if name != "InfiniTime" {
+                    imp.garmin_addrs.borrow_mut().insert(address);
+                }
             }
             BleEvent::Connected { address, firmware } => {
                 // Save address for auto-reconnect
                 let settings = gio::Settings::new("io.github.nico359.pinepal");
-                let _ = settings.set_string("auto-connect-address", &address.to_string());
-                self.show_dashboard(&firmware);
+                if firmware.starts_with("Garmin") {
+                    let _ = settings.set_string("auto-connect-garmin-address", &address.to_string());
+                    // Don't show dashboard for Garmin — keep device list visible
+                    log::info!("Garmin watch connected: {firmware}");
+                } else {
+                    let _ = settings.set_string("auto-connect-address", &address.to_string());
+                    self.show_dashboard(&firmware);
+                }
             }
             BleEvent::FirmwareVersion(fw) => {
                 if let Some(ref dash) = *imp.dashboard_page.borrow() {
@@ -432,10 +463,14 @@ impl PinepalWindow {
         imp.back_button.set_visible(false);
         imp.navigation_view.pop_to_tag("devices");
         imp.devices_page.clear_devices();
+        imp.garmin_addrs.borrow_mut().clear();
 
-        // Re-scan
+        // Re-scan both managers
         if let Some(ref ble) = *imp.ble_handle.borrow() {
             ble.send(BleCommand::StartScan);
+        }
+        if let Some(ref garmin) = *imp.garmin_handle.borrow() {
+            garmin.send(GarminCommand::StartScan);
         }
     }
 
@@ -449,6 +484,7 @@ impl PinepalWindow {
         imp.back_button.set_visible(false);
         imp.navigation_view.pop_to_tag("devices");
         imp.devices_page.clear_devices();
+        imp.garmin_addrs.borrow_mut().clear();
         // No BleCommand::StartScan — let the reconnect loop do its job.
     }
 
@@ -479,6 +515,9 @@ impl PinepalWindow {
                 // Disconnect from watch; Disconnected event will call show_devices()
                 if let Some(ref ble) = *imp.ble_handle.borrow() {
                     ble.send(BleCommand::Disconnect);
+                }
+                if let Some(ref garmin) = *imp.garmin_handle.borrow() {
+                    garmin.send(GarminCommand::Disconnect);
                 }
             } else {
                 // Not connected — jump straight to device scan
