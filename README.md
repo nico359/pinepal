@@ -8,6 +8,7 @@ Companion app for [PineTime](https://www.pine64.org/pinetime/) smartwatches runn
 - Live battery, heart rate, and step count display
 - Step history chart with daily persistence (7d / 30d / all time)
 - Desktop notification forwarding to watch
+- Music/Media controls
 - Background mode (keeps connection alive when window is closed)
 - Said background mode can also be started manually by running flatpak run io.github.nico359.pinepal --gapplication-service
 - Autostart via Background Portal - might not work in e.g. Phosh because the Portal is not implemented there yet)
@@ -16,9 +17,8 @@ Companion app for [PineTime](https://www.pine64.org/pinetime/) smartwatches runn
 
 - Firmware Update of the watch
 - Maybe also heart rate history with the new feature of InfiniTime 1.16
-- Music controls
 - Accepting or declining calls (if that is even possible)
-- Synchronising time of the watch on connect
+- Maybe support for other watches
 
 ## Screenshots
 
@@ -35,7 +35,7 @@ Based on the work of [Watchmate](https://github.com/azymohliad/watchmate) by And
 
 ## AI Disclosure
 
-This application was built with the assistance of AI (GitHub Copilot CLI, Claude).
+This application was built with the assistance of AI (GitHub Copilot CLI, Claude, DeepSeek).
 
 ## Building
 
