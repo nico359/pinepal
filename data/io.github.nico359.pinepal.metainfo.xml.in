@@ -20,12 +20,6 @@
   <url type="vcs-browser">https://github.com/nico359/pinepal</url>
   <url type="bugtracker">https://github.com/nico359/pinepal/issues</url>
 
-  <recommends>
-    <display_length compare="ge">360</display_length>
-    <control>touch</control>
-    <control>keyboard</control>
-    <control>pointing</control>
-  </recommends>
   <supports>
     <control>touch</control>
     <control>keyboard</control>
@@ -56,6 +50,15 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.5.0" date="2026-07-11">
+      <description translate="no">
+        <p>Weather and firmware updates</p>
+        <ul>
+          <li>Push weather data to the watch</li>
+          <li>Check for InfiniTime updates and flash new firmware over BLE</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-06-30">
       <description translate="no">
         <p>Music controls</p>
