@@ -29,6 +29,14 @@ const CHR_NEW_ALERT: Uuid = uuid::uuid!("00002a46-0000-1000-8000-00805f9b34fb");
 const CHR_STEP_COUNT: Uuid = uuid::uuid!("00030001-78fc-48fe-8e23-433b3a1942d0");
 const CHR_SIMPLE_WEATHER: Uuid = uuid::uuid!("00050001-78fc-48fe-8e23-433b3a1942d0");
 
+// Nordic Legacy DFU service UUIDs
+const CHR_DFU_CONTROL_POINT: Uuid = uuid::uuid!("00001531-1212-efde-1523-785feabcd123");
+const CHR_DFU_PACKET: Uuid = uuid::uuid!("00001532-1212-efde-1523-785feabcd123");
+
+/// Minimum battery level required before starting a flash — a dead battery
+/// mid-DFU can leave the watch unbootable.
+const MIN_DFU_BATTERY: u8 = 30;
+
 // InfiniTime Media Player service UUIDs
 const CHR_MP_EVENTS: Uuid = uuid::uuid!("00000001-78fc-48fe-8e23-433b3a1942d0");
 const CHR_MP_STATUS: Uuid = uuid::uuid!("00000002-78fc-48fe-8e23-433b3a1942d0");
@@ -187,6 +195,10 @@ pub enum BleEvent {
         delay_secs: u64,
     },
     MediaPlayerEvent(MediaPlayerEvent),
+    /// 0..=100 progress of an in-progress firmware flash.
+    FirmwareUpdateProgress(u8),
+    /// Human-readable firmware update status ("flashing", "rebooting", "failed: ...").
+    FirmwareUpdateStatus(String),
 }
 
 /// Media player button event from the watch.
@@ -245,6 +257,8 @@ pub enum BleCommand {
     SendMpInfo(MpInfo),
     /// Push weather data to the watch's Simple Weather Service.
     SendWeather(WeatherData),
+    /// Flash a downloaded DFU package to the watch.
+    InstallFirmware(crate::updater::DfuPackage),
 }
 
 /// Handle for sending commands to the BLE task from the UI (glib) thread.
@@ -602,6 +616,8 @@ async fn do_connect(
     let fw = firmware.unwrap_or_else(|| "Unknown".into());
     log::info!("Firmware version: {fw}");
     let _ = tx.send(BleEvent::FirmwareVersion(fw)).await;
+    // Tracked locally (not just forwarded) so InstallFirmware can gate on it.
+    let mut current_battery = battery;
     if let Some(level) = battery {
         log::debug!("Initial battery level: {level}%");
         let _ = tx.send(BleEvent::BatteryLevel(level)).await;
@@ -661,6 +677,7 @@ async fn do_connect(
             val = next_or_pending(&mut battery_stream) => {
                 if let Some(&v) = val.first() {
                     log::debug!("Battery update: {v}%");
+                    current_battery = Some(v);
                     let _ = tx.send(BleEvent::BatteryLevel(v)).await;
                 }
             }
@@ -740,6 +757,12 @@ async fn do_connect(
                         if let Err(e) = write_weather(&chars, &data).await {
                             log::warn!("Weather write failed: {e}");
                         }
+                    }
+                    BleCommand::InstallFirmware(package) => {
+                        // ponytail: blocks this event loop for the ~1min transfer,
+                        // same tradeoff pinetime-furios makes — a DFU-in-progress
+                        // watch shouldn't be juggling other commands anyway.
+                        install_firmware(&chars, &tx, current_battery, package).await;
                     }
                     BleCommand::RequestUpdate => {
                         log::info!("RequestUpdate: re-reading all characteristics for {addr}");
@@ -862,6 +885,48 @@ fn build_alert_message(category: u8, title: &str, body: &str) -> Vec<u8> {
     msg.push(0x00);
     msg.extend_from_slice(body.as_bytes());
     msg
+}
+
+/// Flash a firmware package to the watch, reporting progress/status via `tx`.
+async fn install_firmware(
+    chars: &HashMap<Uuid, bluer::gatt::remote::Characteristic>,
+    tx: &mpsc::Sender<BleEvent>,
+    battery: Option<u8>,
+    package: crate::updater::DfuPackage,
+) {
+    let (Some(cp), Some(pkt)) = (chars.get(&CHR_DFU_CONTROL_POINT), chars.get(&CHR_DFU_PACKET)) else {
+        let _ = tx.send(BleEvent::FirmwareUpdateStatus("failed: watch has no DFU service".into())).await;
+        return;
+    };
+    if let Some(level) = battery {
+        if level < MIN_DFU_BATTERY {
+            let _ = tx
+                .send(BleEvent::FirmwareUpdateStatus(format!(
+                    "failed: battery {level}% too low (need {MIN_DFU_BATTERY}%)"
+                )))
+                .await;
+            return;
+        }
+    }
+
+    log::info!("Starting firmware flash to version {}", package.version);
+    let _ = tx.send(BleEvent::FirmwareUpdateStatus("flashing".into())).await;
+
+    let result = crate::dfu::run_dfu(cp, pkt, &package.bin, &package.dat, |p| {
+        let _ = tx.try_send(BleEvent::FirmwareUpdateProgress(p));
+    })
+    .await;
+
+    match result {
+        Ok(()) => {
+            log::info!("Firmware flashed; watch is rebooting");
+            let _ = tx.send(BleEvent::FirmwareUpdateStatus("rebooting".into())).await;
+        }
+        Err(e) => {
+            log::warn!("Firmware flash failed: {e:#}");
+            let _ = tx.send(BleEvent::FirmwareUpdateStatus(format!("failed: {e}"))).await;
+        }
+    }
 }
 
 /// Encode and write weather to InfiniTime's Simple Weather Service: a Current

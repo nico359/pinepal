@@ -43,6 +43,8 @@ mod imp {
         pub media_player_dropdown: TemplateChild<gtk::DropDown>,
         #[template_child]
         pub weather_row: TemplateChild<adw::ActionRow>,
+        #[template_child]
+        pub firmware_update_button: TemplateChild<gtk::Button>,
 
         pub player_names: RefCell<gtk::StringList>,
         pub step_db: RefCell<Option<Rc<StepDb>>>,
@@ -66,6 +68,7 @@ mod imp {
                 media_player_row: Default::default(),
                 media_player_dropdown: Default::default(),
                 weather_row: Default::default(),
+                firmware_update_button: Default::default(),
                 player_names: RefCell::new(gtk::StringList::new(&[] as &[&str])),
                 step_db: RefCell::new(None),
                 range_days: Cell::new(7),
@@ -147,6 +150,22 @@ impl PinepalDashboardPage {
 
     pub fn set_firmware(&self, version: &str) {
         self.imp().firmware_row.set_subtitle(version);
+    }
+
+    pub fn firmware_version(&self) -> String {
+        self.imp().firmware_row.subtitle().map(|s| s.to_string()).unwrap_or_default()
+    }
+
+    pub fn set_update_button_label(&self, label: &str) {
+        self.imp().firmware_update_button.set_label(label);
+    }
+
+    pub fn set_update_button_sensitive(&self, sensitive: bool) {
+        self.imp().firmware_update_button.set_sensitive(sensitive);
+    }
+
+    pub fn connect_check_update<F: Fn() + 'static>(&self, f: F) {
+        self.imp().firmware_update_button.connect_clicked(move |_| f());
     }
 
     pub fn set_battery(&self, level: u8) {

@@ -12,8 +12,16 @@ use crate::dashboard_page::PinepalDashboardPage;
 use crate::devices_page::PinepalDevicesPage;
 use crate::mpris;
 use crate::step_db::StepDb;
+use crate::updater::{self, LatestRelease};
 use crate::weather::{self, Location};
 use bluer::Address;
+
+/// Firmware update-check results delivered back to the glib main loop.
+pub enum UpdateUiEvent {
+    Available(LatestRelease),
+    UpToDate,
+    Error(String),
+}
 
 /// Weather results delivered from the tokio task back to the glib main loop.
 pub enum WeatherUiEvent {
@@ -50,6 +58,8 @@ mod imp {
         pub weather_task: RefCell<Option<tokio::task::JoinHandle<()>>>,
         pub weather_tx: RefCell<Option<tokio::sync::mpsc::Sender<WeatherUiEvent>>>,
         pub weather_rx: RefCell<Option<tokio::sync::mpsc::Receiver<WeatherUiEvent>>>,
+        pub update_tx: RefCell<Option<tokio::sync::mpsc::Sender<UpdateUiEvent>>>,
+        pub update_rx: RefCell<Option<tokio::sync::mpsc::Receiver<UpdateUiEvent>>>,
     }
 
     impl Default for PinepalWindow {
@@ -70,6 +80,8 @@ mod imp {
                 weather_task: RefCell::new(None),
                 weather_tx: RefCell::new(None),
                 weather_rx: RefCell::new(None),
+                update_tx: RefCell::new(None),
+                update_rx: RefCell::new(None),
             }
         }
     }
@@ -234,6 +246,12 @@ impl PinepalWindow {
                 let _ = settings.set_string("weather-location", &format_saved_location(&loc));
                 window.start_weather_refresh(loc);
             }
+            // Poll firmware update-check results
+            if let Some(ref mut rx) = *imp.update_rx.borrow_mut() {
+                while let Ok(event) = rx.try_recv() {
+                    window.handle_update_event(event);
+                }
+            }
             glib::ControlFlow::Continue
         });
     }
@@ -329,6 +347,23 @@ impl PinepalWindow {
             BleEvent::MediaPlayerEvent(event) => {
                 if let Some(ref tx) = *imp.mp_event_tx.borrow() {
                     let _ = tx.try_send(event);
+                }
+            }
+            BleEvent::FirmwareUpdateProgress(pct) => {
+                if let Some(ref dash) = *imp.dashboard_page.borrow() {
+                    dash.set_update_button_label(&format!("Updating… {pct}%"));
+                }
+            }
+            BleEvent::FirmwareUpdateStatus(status) => {
+                if let Some(ref dash) = *imp.dashboard_page.borrow() {
+                    let label = match status.as_str() {
+                        "flashing" => "Updating… 0%".to_string(),
+                        "rebooting" => "Rebooting…".to_string(),
+                        s if s.starts_with("failed") => format!("Update failed ({s})"),
+                        s => s.to_string(),
+                    };
+                    dash.set_update_button_label(&label);
+                    dash.set_update_button_sensitive(status.starts_with("failed"));
                 }
             }
         }
@@ -428,6 +463,16 @@ impl PinepalWindow {
             }
         });
 
+        // ---- Firmware update setup ----
+        let (update_tx, update_rx) = tokio::sync::mpsc::channel(4);
+        imp.update_tx.replace(Some(update_tx));
+        imp.update_rx.replace(Some(update_rx));
+
+        let window_for_update = self.clone();
+        dashboard.connect_check_update(move || {
+            window_for_update.check_for_update();
+        });
+
         // ---- Weather setup ----
         let (weather_tx, weather_rx) = tokio::sync::mpsc::channel(4);
         imp.weather_tx.replace(Some(weather_tx));
@@ -473,6 +518,103 @@ impl PinepalWindow {
         }
     }
 
+    /// Check GitHub for a newer InfiniTime release than the connected watch's.
+    fn check_for_update(&self) {
+        let imp = self.imp();
+        let Some(rt) = imp.tokio_rt.borrow().clone() else { return };
+        let Some(tx) = imp.update_tx.borrow().clone() else { return };
+        let Some(current) = imp.dashboard_page.borrow().as_ref().map(|d| d.firmware_version()) else { return };
+        if let Some(ref dash) = *imp.dashboard_page.borrow() {
+            dash.set_update_button_sensitive(false);
+            dash.set_update_button_label("Checking…");
+        }
+        rt.spawn(async move {
+            match updater::fetch_latest().await {
+                Ok(release) => {
+                    if updater::is_newer(&release.version, &current) {
+                        let _ = tx.send(UpdateUiEvent::Available(release)).await;
+                    } else {
+                        let _ = tx.send(UpdateUiEvent::UpToDate).await;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Firmware check failed: {e:#}");
+                    let _ = tx.send(UpdateUiEvent::Error(e.to_string())).await;
+                }
+            }
+        });
+    }
+
+    fn handle_update_event(&self, event: UpdateUiEvent) {
+        let imp = self.imp();
+        match event {
+            UpdateUiEvent::Available(release) => {
+                if let Some(ref dash) = *imp.dashboard_page.borrow() {
+                    dash.set_update_button_label("Check for Update");
+                    dash.set_update_button_sensitive(true);
+                }
+                self.show_update_dialog(release);
+            }
+            UpdateUiEvent::UpToDate => {
+                if let Some(ref dash) = *imp.dashboard_page.borrow() {
+                    dash.set_update_button_label("Up to Date");
+                    dash.set_update_button_sensitive(true);
+                }
+            }
+            UpdateUiEvent::Error(msg) => {
+                log::warn!("Firmware check error: {msg}");
+                if let Some(ref dash) = *imp.dashboard_page.borrow() {
+                    dash.set_update_button_label("Check Failed");
+                    dash.set_update_button_sensitive(true);
+                }
+            }
+        }
+    }
+
+    fn show_update_dialog(&self, release: LatestRelease) {
+        let dialog = adw::AlertDialog::builder()
+            .heading("Firmware Update Available")
+            .body(format!(
+                "InfiniTime {} is available. Keep the watch nearby and charged during the update.",
+                release.version
+            ))
+            .build();
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("install", "Install");
+        dialog.set_response_appearance("install", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("install"));
+        dialog.set_close_response("cancel");
+
+        let window = self.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response == "install" {
+                window.start_firmware_update(release.clone());
+            }
+        });
+        dialog.present(Some(self));
+    }
+
+    /// Download the DFU package and hand it to the BLE manager to flash.
+    fn start_firmware_update(&self, release: LatestRelease) {
+        let imp = self.imp();
+        let Some(rt) = imp.tokio_rt.borrow().clone() else { return };
+        let Some(ble) = imp.ble_handle.borrow().clone() else { return };
+        let Some(tx) = imp.update_tx.borrow().clone() else { return };
+        if let Some(ref dash) = *imp.dashboard_page.borrow() {
+            dash.set_update_button_sensitive(false);
+            dash.set_update_button_label("Downloading…");
+        }
+        rt.spawn(async move {
+            match updater::download_package(&release).await {
+                Ok(package) => ble.send(BleCommand::InstallFirmware(package)),
+                Err(e) => {
+                    log::warn!("Firmware download failed: {e:#}");
+                    let _ = tx.send(UpdateUiEvent::Error(e.to_string())).await;
+                }
+            }
+        });
+    }
+
     fn stop_mpris_tasks(&self) {
         self.abort_control_session();
         if let Some(handle) = self.imp().mpris_watcher.borrow_mut().take() {
@@ -490,6 +632,8 @@ impl PinepalWindow {
         imp.dashboard_page.replace(None);
         imp.weather_tx.replace(None);
         imp.weather_rx.replace(None);
+        imp.update_tx.replace(None);
+        imp.update_rx.replace(None);
         imp.back_button.set_visible(false);
         imp.navigation_view.pop_to_tag("devices");
         imp.devices_page.clear_devices();
@@ -510,6 +654,8 @@ impl PinepalWindow {
         imp.dashboard_page.replace(None);
         imp.weather_tx.replace(None);
         imp.weather_rx.replace(None);
+        imp.update_tx.replace(None);
+        imp.update_rx.replace(None);
         imp.back_button.set_visible(false);
         imp.navigation_view.pop_to_tag("devices");
         imp.devices_page.clear_devices();

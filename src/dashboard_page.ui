@@ -34,6 +34,12 @@
                             <property name="icon-name">dialog-information-symbolic</property>
                           </object>
                         </child>
+                        <child type="suffix">
+                          <object class="GtkButton" id="firmware_update_button">
+                            <property name="label" translatable="yes">Check for Update</property>
+                            <property name="valign">center</property>
+                          </object>
+                        </child>
                       </object>
                     </child>
                   </object>

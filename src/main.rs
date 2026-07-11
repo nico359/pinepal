@@ -6,6 +6,7 @@ mod ble_manager;
 mod config;
 mod dashboard_page;
 mod devices_page;
+mod dfu;
 mod log_collector;
 mod log_viewer;
 mod mpris;
@@ -13,6 +14,7 @@ mod notifications;
 mod preferences_dialog;
 mod step_chart;
 mod step_db;
+mod updater;
 mod weather;
 mod window;
 
