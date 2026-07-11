@@ -13,6 +13,7 @@
         "--device=dri",
         "--socket=wayland",
         "--allow=bluetooth",
+        "--share=network",
         "--socket=session-bus",
         "--system-talk-name=org.bluez",
         "--talk-name=org.freedesktop.Notifications",

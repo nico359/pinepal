@@ -2,7 +2,7 @@
 // BLE connection manager for InfiniTime watches.
 // Handles discovery, connection, characteristic I/O, and reconnection with backoff.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use bluer::{Adapter, AdapterEvent, AdapterProperty, Address, Device};
 use bluer::gatt::local::{
     Application, ApplicationHandle, Characteristic, CharacteristicRead, Service,
@@ -15,6 +15,8 @@ use tokio::sync::mpsc;
 use tokio::time::{sleep, timeout, Duration};
 use uuid::Uuid;
 
+use crate::weather::WeatherData;
+
 // Standard BLE UUIDs
 const SRV_CURRENT_TIME: Uuid = uuid::uuid!("00001805-0000-1000-8000-00805f9b34fb");
 const CHR_CURRENT_TIME: Uuid = uuid::uuid!("00002a2b-0000-1000-8000-00805f9b34fb");
@@ -25,6 +27,7 @@ const CHR_NEW_ALERT: Uuid = uuid::uuid!("00002a46-0000-1000-8000-00805f9b34fb");
 
 // InfiniTime custom UUIDs
 const CHR_STEP_COUNT: Uuid = uuid::uuid!("00030001-78fc-48fe-8e23-433b3a1942d0");
+const CHR_SIMPLE_WEATHER: Uuid = uuid::uuid!("00050001-78fc-48fe-8e23-433b3a1942d0");
 
 // InfiniTime Media Player service UUIDs
 const CHR_MP_EVENTS: Uuid = uuid::uuid!("00000001-78fc-48fe-8e23-433b3a1942d0");
@@ -240,6 +243,8 @@ pub enum BleCommand {
     Shutdown,
     /// Send media player info to the watch.
     SendMpInfo(MpInfo),
+    /// Push weather data to the watch's Simple Weather Service.
+    SendWeather(WeatherData),
 }
 
 /// Handle for sending commands to the BLE task from the UI (glib) thread.
@@ -731,6 +736,11 @@ async fn do_connect(
                     BleCommand::SendMpInfo(info) => {
                         write_mp_info(&chars, &info).await;
                     }
+                    BleCommand::SendWeather(data) => {
+                        if let Err(e) = write_weather(&chars, &data).await {
+                            log::warn!("Weather write failed: {e}");
+                        }
+                    }
                     BleCommand::RequestUpdate => {
                         log::info!("RequestUpdate: re-reading all characteristics for {addr}");
                         let fw_chr    = chars.get(&CHR_FIRMWARE_REV).cloned();
@@ -852,6 +862,53 @@ fn build_alert_message(category: u8, title: &str, body: &str) -> Vec<u8> {
     msg.push(0x00);
     msg.extend_from_slice(body.as_bytes());
     msg
+}
+
+/// Encode and write weather to InfiniTime's Simple Weather Service: a Current
+/// message (type 0) and, if available, a Forecast message (type 1). Layout
+/// matches the firmware's `SimpleWeatherService` parser (temps int16 0.01°C LE).
+async fn write_weather(
+    chars: &HashMap<Uuid, bluer::gatt::remote::Characteristic>,
+    w: &WeatherData,
+) -> Result<()> {
+    let Some(c) = chars.get(&CHR_SIMPLE_WEATHER) else {
+        return Ok(());
+    };
+
+    // Current: [0]=type, [1]=version, [2..10]=timestamp, [10..12]=temp,
+    // [12..14]=min, [14..16]=max, [16..48]=city(32B), [48]=icon.
+    let mut current = Vec::with_capacity(49);
+    current.push(0); // CurrentWeather
+    current.push(0); // version 0 (no sunrise/sunset)
+    current.extend_from_slice(&w.timestamp.to_le_bytes());
+    current.extend_from_slice(&w.current_temp.to_le_bytes());
+    current.extend_from_slice(&w.today_min.to_le_bytes());
+    current.extend_from_slice(&w.today_max.to_le_bytes());
+    let mut city = [0u8; 32];
+    let name = w.location.as_bytes();
+    let n = name.len().min(32);
+    city[..n].copy_from_slice(&name[..n]);
+    current.extend_from_slice(&city);
+    current.push(w.current_icon);
+    c.write(&current).await.context("writing current weather")?;
+
+    // Forecast: [0]=type, [1]=version, [2..10]=timestamp, [10]=nbDays,
+    // then 5 bytes/day: min(i16), max(i16), icon.
+    if !w.forecast.is_empty() {
+        let days = &w.forecast[..w.forecast.len().min(5)];
+        let mut forecast = Vec::with_capacity(11 + days.len() * 5);
+        forecast.push(1); // Forecast
+        forecast.push(0); // version 0
+        forecast.extend_from_slice(&w.timestamp.to_le_bytes());
+        forecast.push(days.len() as u8);
+        for day in days {
+            forecast.extend_from_slice(&day.min.to_le_bytes());
+            forecast.extend_from_slice(&day.max.to_le_bytes());
+            forecast.push(day.icon);
+        }
+        c.write(&forecast).await.context("writing forecast")?;
+    }
+    Ok(())
 }
 
 async fn write_mp_info(

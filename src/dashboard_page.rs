@@ -41,6 +41,8 @@ mod imp {
         pub media_player_row: TemplateChild<adw::ActionRow>,
         #[template_child]
         pub media_player_dropdown: TemplateChild<gtk::DropDown>,
+        #[template_child]
+        pub weather_row: TemplateChild<adw::ActionRow>,
 
         pub player_names: RefCell<gtk::StringList>,
         pub step_db: RefCell<Option<Rc<StepDb>>>,
@@ -63,6 +65,7 @@ mod imp {
                 media_player_group: Default::default(),
                 media_player_row: Default::default(),
                 media_player_dropdown: Default::default(),
+                weather_row: Default::default(),
                 player_names: RefCell::new(gtk::StringList::new(&[] as &[&str])),
                 step_db: RefCell::new(None),
                 range_days: Cell::new(7),
@@ -225,6 +228,14 @@ impl PinepalDashboardPage {
         dropdown.connect_selected_notify(move |d| {
             f(d.selected() as usize);
         });
+    }
+
+    pub fn set_weather(&self, summary: &str) {
+        self.imp().weather_row.set_subtitle(summary);
+    }
+
+    pub fn connect_weather_activated<F: Fn() + 'static>(&self, f: F) {
+        self.imp().weather_row.connect_activated(move |_| f());
     }
 }
 

@@ -13,6 +13,7 @@ mod notifications;
 mod preferences_dialog;
 mod step_chart;
 mod step_db;
+mod weather;
 mod window;
 
 use self::application::PinepalApplication;

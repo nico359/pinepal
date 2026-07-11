@@ -21,5 +21,10 @@
 			<summary>Run in background</summary>
 			<description>Keep the app running and connected when the window is closed.</description>
 		</key>
+		<key name="weather-location" type="s">
+			<default>''</default>
+			<summary>Weather location</summary>
+			<description>Saved location for weather updates, stored as "name|latitude|longitude".</description>
+		</key>
 	</schema>
 </schemalist>

@@ -12,7 +12,17 @@ use crate::dashboard_page::PinepalDashboardPage;
 use crate::devices_page::PinepalDevicesPage;
 use crate::mpris;
 use crate::step_db::StepDb;
+use crate::weather::{self, Location};
 use bluer::Address;
+
+/// Weather results delivered from the tokio task back to the glib main loop.
+pub enum WeatherUiEvent {
+    Updated(String),
+    Error(String),
+    /// A geocode succeeded; the glib thread should (re)start the refresh loop
+    /// (it owns the !Send GTK/BLE handles, so this can't be done from tokio).
+    LocationResolved(Location),
+}
 
 mod imp {
     use super::*;
@@ -37,6 +47,9 @@ mod imp {
         pub mpris_watcher: RefCell<Option<tokio::task::JoinHandle<()>>>,
         pub mpris_control: RefCell<Option<tokio::task::JoinHandle<()>>>,
         pub mpris_action_rx: RefCell<Option<tokio::sync::mpsc::Receiver<mpris::PlayersListEvent>>>,
+        pub weather_task: RefCell<Option<tokio::task::JoinHandle<()>>>,
+        pub weather_tx: RefCell<Option<tokio::sync::mpsc::Sender<WeatherUiEvent>>>,
+        pub weather_rx: RefCell<Option<tokio::sync::mpsc::Receiver<WeatherUiEvent>>>,
     }
 
     impl Default for PinepalWindow {
@@ -54,6 +67,9 @@ mod imp {
                 mpris_watcher: RefCell::new(None),
                 mpris_control: RefCell::new(None),
                 mpris_action_rx: RefCell::new(None),
+                weather_task: RefCell::new(None),
+                weather_tx: RefCell::new(None),
+                weather_rx: RefCell::new(None),
             }
         }
     }
@@ -193,6 +209,30 @@ impl PinepalWindow {
                 while let Ok(action) = rx.try_recv() {
                     window.handle_mpris_action(action);
                 }
+            }
+            // Poll weather fetch results
+            let mut resolved_location = None;
+            if let Some(ref mut rx) = *imp.weather_rx.borrow_mut() {
+                while let Ok(event) = rx.try_recv() {
+                    match event {
+                        WeatherUiEvent::Updated(summary) => {
+                            if let Some(ref dash) = *imp.dashboard_page.borrow() {
+                                dash.set_weather(&summary);
+                            }
+                        }
+                        WeatherUiEvent::Error(msg) => {
+                            if let Some(ref dash) = *imp.dashboard_page.borrow() {
+                                dash.set_weather(&format!("Error: {msg}"));
+                            }
+                        }
+                        WeatherUiEvent::LocationResolved(loc) => resolved_location = Some(loc),
+                    }
+                }
+            }
+            if let Some(loc) = resolved_location {
+                let settings = gio::Settings::new("io.github.nico359.pinepal");
+                let _ = settings.set_string("weather-location", &format_saved_location(&loc));
+                window.start_weather_refresh(loc);
             }
             glib::ControlFlow::Continue
         });
@@ -388,6 +428,24 @@ impl PinepalWindow {
             }
         });
 
+        // ---- Weather setup ----
+        let (weather_tx, weather_rx) = tokio::sync::mpsc::channel(4);
+        imp.weather_tx.replace(Some(weather_tx));
+        imp.weather_rx.replace(Some(weather_rx));
+
+        let window_for_weather = self.clone();
+        dashboard.connect_weather_activated(move || {
+            window_for_weather.show_weather_dialog();
+        });
+
+        // Resume pushing weather for the last saved location, if any.
+        let settings = gio::Settings::new("io.github.nico359.pinepal");
+        let saved = settings.string("weather-location");
+        if let Some(loc) = parse_saved_location(&saved) {
+            dashboard.set_weather(&format!("Loading weather for {}…", loc.name));
+            self.start_weather_refresh(loc);
+        }
+
         imp.dashboard_page.replace(Some(dashboard.clone()));
 
         let nav_page = adw::NavigationPage::builder()
@@ -427,8 +485,11 @@ impl PinepalWindow {
 
     fn show_devices(&self) {
         self.stop_mpris_tasks();
+        self.stop_weather_task();
         let imp = self.imp();
         imp.dashboard_page.replace(None);
+        imp.weather_tx.replace(None);
+        imp.weather_rx.replace(None);
         imp.back_button.set_visible(false);
         imp.navigation_view.pop_to_tag("devices");
         imp.devices_page.clear_devices();
@@ -444,8 +505,11 @@ impl PinepalWindow {
     /// reconnect loop is already running and must not be interrupted.
     fn show_devices_no_scan(&self) {
         self.stop_mpris_tasks();
+        self.stop_weather_task();
         let imp = self.imp();
         imp.dashboard_page.replace(None);
+        imp.weather_tx.replace(None);
+        imp.weather_rx.replace(None);
         imp.back_button.set_visible(false);
         imp.navigation_view.pop_to_tag("devices");
         imp.devices_page.clear_devices();
@@ -487,4 +551,107 @@ impl PinepalWindow {
         });
         self.add_action(&action);
     }
+
+    /// Prompt for an address/city, then start pushing weather for it.
+    fn show_weather_dialog(&self) {
+        let entry = gtk::Entry::builder()
+            .placeholder_text("e.g. Berlin, Germany")
+            .activates_default(true)
+            .build();
+
+        let dialog = adw::AlertDialog::builder()
+            .heading("Weather Location")
+            .body("Location on this device isn't reliable - enter an address or city instead.")
+            .extra_child(&entry)
+            .build();
+        dialog.add_response("cancel", "Cancel");
+        dialog.add_response("set", "Set");
+        dialog.set_response_appearance("set", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("set"));
+        dialog.set_close_response("cancel");
+
+        let window = self.clone();
+        dialog.connect_response(None, move |_, response| {
+            if response != "set" {
+                return;
+            }
+            let query = entry.text().to_string();
+            if query.trim().is_empty() {
+                return;
+            }
+            window.geocode_and_start(query);
+        });
+        dialog.present(Some(self));
+    }
+
+    /// Resolve `query` to coordinates; the refresh loop is (re)started once the
+    /// result comes back on the glib thread (see the `LocationResolved` handler).
+    fn geocode_and_start(&self, query: String) {
+        let Some(rt) = self.imp().tokio_rt.borrow().clone() else { return };
+        let Some(tx) = self.imp().weather_tx.borrow().clone() else { return };
+        rt.spawn(async move {
+            match weather::geocode(&query).await {
+                Ok(loc) => {
+                    let _ = tx
+                        .send(WeatherUiEvent::Updated(format!("Loading weather for {}…", loc.name)))
+                        .await;
+                    let _ = tx.send(WeatherUiEvent::LocationResolved(loc)).await;
+                }
+                Err(e) => {
+                    log::warn!("Geocoding failed: {e:#}");
+                    let _ = tx.send(WeatherUiEvent::Error(format!("location not found: {e}"))).await;
+                }
+            }
+        });
+    }
+
+    /// Fetch weather for `loc` immediately, push it to the watch, and repeat
+    /// every 30 minutes for as long as this task runs (aborted on disconnect).
+    fn start_weather_refresh(&self, loc: Location) {
+        self.stop_weather_task();
+        let Some(rt) = self.imp().tokio_rt.borrow().clone() else { return };
+        let Some(ble) = self.imp().ble_handle.borrow().clone() else { return };
+        let Some(tx) = self.imp().weather_tx.borrow().clone() else { return };
+
+        let task = rt.spawn(async move {
+            loop {
+                match weather::fetch(&loc).await {
+                    Ok(data) => {
+                        ble.send(BleCommand::SendWeather(data.clone()));
+                        let _ = tx.send(WeatherUiEvent::Updated(data.summary())).await;
+                    }
+                    Err(e) => {
+                        log::warn!("Weather fetch failed: {e:#}");
+                        let _ = tx.send(WeatherUiEvent::Error(e.to_string())).await;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
+            }
+        });
+        self.imp().weather_task.replace(Some(task));
+    }
+
+    fn stop_weather_task(&self) {
+        if let Some(handle) = self.imp().weather_task.borrow_mut().take() {
+            handle.abort();
+            log::debug!("Weather refresh task stopped");
+        }
+    }
+}
+
+/// Format a location for storage as a single GSettings string.
+fn format_saved_location(loc: &Location) -> String {
+    format!("{}|{}|{}", loc.name, loc.lat, loc.lon)
+}
+
+/// Parse a location previously saved by `format_saved_location`.
+fn parse_saved_location(saved: &str) -> Option<Location> {
+    let mut parts = saved.splitn(3, '|');
+    let name = parts.next()?.to_string();
+    let lat: f64 = parts.next()?.parse().ok()?;
+    let lon: f64 = parts.next()?.parse().ok()?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(Location { lat, lon, name })
 }
