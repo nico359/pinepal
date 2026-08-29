@@ -30,6 +30,12 @@ const CHR_NEW_ALERT: Uuid = uuid::uuid!("00002a46-0000-1000-8000-00805f9b34fb");
 // InfiniTime custom UUIDs
 const CHR_STEP_COUNT: Uuid = uuid::uuid!("00030001-78fc-48fe-8e23-433b3a1942d0");
 const CHR_SIMPLE_WEATHER: Uuid = uuid::uuid!("00050001-78fc-48fe-8e23-433b3a1942d0");
+/// InfiniTime Alert Notification Service: reports the watch's response
+/// (answer/reject/mute) to an incoming-call alert.
+const CHR_NOTIFICATION_EVENT: Uuid = uuid::uuid!("00020001-78fc-48fe-8e23-433b3a1942d0");
+
+/// ANS category that makes InfiniTime show the answer/reject call screen.
+const ANS_CATEGORY_INCOMING_CALL: u8 = 0x03;
 
 // Nordic Legacy DFU service UUIDs
 const CHR_DFU_CONTROL_POINT: Uuid = uuid::uuid!("00001531-1212-efde-1523-785feabcd123");
@@ -232,6 +238,26 @@ impl MediaPlayerEvent {
     }
 }
 
+/// A response to an incoming call, pressed on the watch.
+#[derive(Clone, Copy, Debug)]
+pub enum CallAction {
+    Answer,
+    Reject,
+    Mute,
+}
+
+impl CallAction {
+    /// Map an InfiniTime Notification Event byte to a call action.
+    pub fn from_event(byte: u8) -> Option<CallAction> {
+        match byte {
+            0x00 => Some(CallAction::Reject),
+            0x01 => Some(CallAction::Answer),
+            0x02 => Some(CallAction::Mute),
+            _ => None,
+        }
+    }
+}
+
 /// Media track info sent to the watch's media player service.
 #[derive(Debug, Default, Clone)]
 pub struct MpInfo {
@@ -263,6 +289,8 @@ pub enum BleCommand {
     SendWeather(WeatherData),
     /// Flash a downloaded DFU package to the watch.
     InstallFirmware(crate::updater::DfuPackage),
+    /// Show an incoming call on the watch (answer/reject screen).
+    IncomingCall { name: String, number: String },
 }
 
 /// Shared slot resolving an in-flight pairing passkey request. Accessed
@@ -299,11 +327,15 @@ impl BleHandle {
 
 /// Spawn the BLE manager on the given tokio runtime.
 /// Returns a command handle and a receiver for BLE events.
-pub fn spawn(rt: &tokio::runtime::Runtime) -> (BleHandle, mpsc::Receiver<BleEvent>) {
+/// Watch-pressed call actions (answer/reject/mute) are forwarded to `call_action_tx`.
+pub fn spawn(
+    rt: &tokio::runtime::Runtime,
+    call_action_tx: mpsc::Sender<CallAction>,
+) -> (BleHandle, mpsc::Receiver<BleEvent>) {
     let (event_tx, event_rx) = mpsc::channel(64);
     let (cmd_tx, cmd_rx) = mpsc::channel(32);
     let passkey_slot = PasskeySlot::default();
-    rt.spawn(ble_task(event_tx, cmd_rx, passkey_slot.clone()));
+    rt.spawn(ble_task(event_tx, cmd_rx, passkey_slot.clone(), call_action_tx));
     (BleHandle { cmd_tx, passkey_slot }, event_rx)
 }
 
@@ -312,6 +344,7 @@ async fn ble_task(
     tx: mpsc::Sender<BleEvent>,
     mut rx: mpsc::Receiver<BleCommand>,
     passkey_slot: PasskeySlot,
+    call_action_tx: mpsc::Sender<CallAction>,
 ) {
     log::info!("BLE task started");
 
@@ -450,7 +483,7 @@ async fn ble_task(
             let _ = tx.send(BleEvent::Reconnecting { attempt: attempts + 1, delay_secs: 0 }).await;
 
             // Attempt connection
-            match do_connect(&adapter, addr, &tx, &mut rx, !pairing_failed).await {
+            match do_connect(&adapter, addr, &tx, &mut rx, !pairing_failed, &call_action_tx).await {
                 Ok(DisconnectReason::UserRequested) => {
                     log::info!("Disconnected by user request");
                     auto_addr = None;
@@ -581,6 +614,7 @@ async fn do_connect(
     tx: &mpsc::Sender<BleEvent>,
     rx: &mut mpsc::Receiver<BleCommand>,
     pair: bool,
+    call_action_tx: &mpsc::Sender<CallAction>,
 ) -> Result<DisconnectReason> {
     let device = adapter.device(addr)?;
 
@@ -726,6 +760,15 @@ async fn do_connect(
             }
         } else { None };
 
+    // Incoming-call response stream (answer/reject/mute pressed on the watch)
+    let mut call_event_stream: Option<std::pin::Pin<Box<dyn futures::Stream<Item = Vec<u8>> + Send>>> =
+        if let Some(chr) = chars.get(&CHR_NOTIFICATION_EVENT) {
+            match chr.notify().await {
+                Ok(s) => { log::debug!("Call event notify subscribed"); Some(Box::pin(s) as _) }
+                Err(e) => { log::debug!("Call event notify not available: {e}"); None }
+            }
+        } else { None };
+
     let alert_chr = chars.get(&CHR_NEW_ALERT).cloned();
 
     log::debug!("Subscribing to device property events on {addr}");
@@ -760,6 +803,14 @@ async fn do_connect(
                     if let Some(evt) = MediaPlayerEvent::from_raw(v) {
                         log::debug!("Media player event: {:?}", evt);
                         let _ = tx.send(BleEvent::MediaPlayerEvent(evt)).await;
+                    }
+                }
+            }
+            val = next_or_pending(&mut call_event_stream) => {
+                if let Some(&v) = val.first() {
+                    if let Some(action) = CallAction::from_event(v) {
+                        log::info!("Call action from watch: {:?}", action);
+                        let _ = call_action_tx.try_send(action);
                     }
                 }
             }
@@ -819,6 +870,20 @@ async fn do_connect(
                     BleCommand::SendWeather(data) => {
                         if let Err(e) = write_weather(&chars, &data).await {
                             log::warn!("Weather write failed: {e}");
+                        }
+                    }
+                    BleCommand::IncomingCall { name, number } => {
+                        // Category "Call" makes InfiniTime show the answer/reject screen.
+                        let (title, body) = if name.is_empty() {
+                            (number.as_str(), "")
+                        } else {
+                            (name.as_str(), number.as_str())
+                        };
+                        if let Some(ref chr) = alert_chr {
+                            let msg = build_alert_message(ANS_CATEGORY_INCOMING_CALL, title, body);
+                            if let Err(e) = chr.write(&msg).await {
+                                log::warn!("Call alert write failed: {e}");
+                            }
                         }
                     }
                     BleCommand::InstallFirmware(package) => {

@@ -12,6 +12,7 @@ use std::time::Duration;
 use crate::ble_manager::{self, BleCommand, BleEvent, BleHandle};
 use crate::config::VERSION;
 use crate::notifications;
+use crate::telephony;
 use crate::PinepalWindow;
 
 mod imp {
@@ -98,7 +99,9 @@ mod imp {
                         (ble, rx, service_fw)
                     } else {
                         // No service running — spawn a fresh BLE stack.
-                        let (ble, rx) = ble_manager::spawn(rt);
+                        let (call_action_tx, call_action_rx) = tokio::sync::mpsc::channel(8);
+                        let (ble, rx) = ble_manager::spawn(rt, call_action_tx);
+                        telephony::spawn_telephony(rt, ble.clone(), call_action_rx);
 
                         // Notification forwarding: bridge GSettings to an AtomicBool
                         let settings = gio::Settings::new("io.github.nico359.pinepal");
@@ -176,7 +179,9 @@ impl PinepalApplication {
         let imp = self.imp();
         let rt = imp.tokio_rt.get().expect("tokio runtime initialised in startup");
 
-        let (ble_handle, event_rx) = ble_manager::spawn(rt);
+        let (call_action_tx, call_action_rx) = tokio::sync::mpsc::channel(8);
+        let (ble_handle, event_rx) = ble_manager::spawn(rt, call_action_tx);
+        telephony::spawn_telephony(rt, ble_handle.clone(), call_action_rx);
 
         // Notification forwarding
         let settings = gio::Settings::new("io.github.nico359.pinepal");

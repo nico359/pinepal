@@ -16,6 +16,7 @@
         "--share=network",
         "--socket=session-bus",
         "--system-talk-name=org.bluez",
+        "--system-talk-name=org.ofono",
         "--talk-name=org.freedesktop.Notifications",
         "--talk-name=org.mpris.MediaPlayer2.*"
     ],

@@ -14,6 +14,7 @@ mod notifications;
 mod preferences_dialog;
 mod step_chart;
 mod step_db;
+mod telephony;
 mod updater;
 mod weather;
 mod window;
