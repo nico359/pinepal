@@ -3,6 +3,7 @@
 use adw::prelude::*;
 use adw::subclass::prelude::*;
 use futures::StreamExt;
+use gettextrs::gettext;
 use gtk::{gio, glib};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -366,7 +367,40 @@ impl PinepalWindow {
                     dash.set_update_button_sensitive(status.starts_with("failed"));
                 }
             }
+            BleEvent::PasskeyRequested => {
+                self.show_passkey_dialog();
+            }
         }
+    }
+
+    /// Prompt for the 6-digit pairing code displayed on the watch.
+    fn show_passkey_dialog(&self) {
+        let dialog = adw::AlertDialog::builder()
+            .heading(gettext("Pair with Watch"))
+            .body(gettext("Enter the 6-digit code shown on your watch."))
+            .build();
+        let entry = gtk::Entry::builder()
+            .input_purpose(gtk::InputPurpose::Digits)
+            .max_length(6)
+            .build();
+        dialog.set_extra_child(Some(&entry));
+        dialog.add_response("cancel", &gettext("Cancel"));
+        dialog.add_response("pair", &gettext("Pair"));
+        dialog.set_response_appearance("pair", adw::ResponseAppearance::Suggested);
+        dialog.set_default_response(Some("pair"));
+
+        let ble = self.imp().ble_handle.borrow().clone();
+        dialog.connect_response(None, move |_, response| {
+            let Some(ref ble) = ble else { return };
+            if response == "pair" {
+                if let Ok(code) = entry.text().parse::<u32>() {
+                    ble.provide_passkey(code);
+                    return;
+                }
+            }
+            ble.cancel_passkey();
+        });
+        dialog.present(Some(self));
     }
 
     fn show_dashboard(&self, firmware: &str) {

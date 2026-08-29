@@ -221,6 +221,13 @@ impl PinepalApplication {
                             BleEvent::Disconnected { .. } => {
                                 *imp.service_connected_fw.borrow_mut() = None;
                             }
+                            BleEvent::PasskeyRequested => {
+                                // No window to show the prompt — fail pairing
+                                // fast instead of blocking on BlueZ's timeout.
+                                if let Some(ref ble) = *imp.service_ble.borrow() {
+                                    ble.cancel_passkey();
+                                }
+                            }
                             _ => {}
                         }
                     }

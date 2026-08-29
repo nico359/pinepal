@@ -3,6 +3,7 @@
 // Handles discovery, connection, characteristic I/O, and reconnection with backoff.
 
 use anyhow::{anyhow, Context, Result};
+use bluer::agent::{Agent, ReqError, RequestConfirmation, RequestPasskey};
 use bluer::{Adapter, AdapterEvent, AdapterProperty, Address, Device};
 use bluer::gatt::local::{
     Application, ApplicationHandle, Characteristic, CharacteristicRead, Service,
@@ -11,7 +12,8 @@ use chrono::{Datelike, Local, Timelike};
 use futures::FutureExt;
 use futures::StreamExt;
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use tokio::sync::{mpsc, oneshot};
 use tokio::time::{sleep, timeout, Duration};
 use uuid::Uuid;
 
@@ -199,6 +201,8 @@ pub enum BleEvent {
     FirmwareUpdateProgress(u8),
     /// Human-readable firmware update status ("flashing", "rebooting", "failed: ...").
     FirmwareUpdateStatus(String),
+    /// The watch is displaying a 6-digit pairing code; the UI should prompt for it.
+    PasskeyRequested,
 }
 
 /// Media player button event from the watch.
@@ -261,16 +265,35 @@ pub enum BleCommand {
     InstallFirmware(crate::updater::DfuPackage),
 }
 
+/// Shared slot resolving an in-flight pairing passkey request. Accessed
+/// directly (not via BleCommand) because the BLE task is blocked inside
+/// `device.pair()` while waiting for the code — a queued command would deadlock.
+type PasskeySlot = Arc<Mutex<Option<oneshot::Sender<u32>>>>;
+
 /// Handle for sending commands to the BLE task from the UI (glib) thread.
 #[derive(Clone, Debug)]
 pub struct BleHandle {
     cmd_tx: mpsc::Sender<BleCommand>,
+    passkey_slot: PasskeySlot,
 }
 
 impl BleHandle {
     /// Send a command to the BLE manager. Non-blocking, drops if full.
     pub fn send(&self, cmd: BleCommand) {
         let _ = self.cmd_tx.try_send(cmd);
+    }
+
+    /// Provide the passkey shown on the watch to an in-flight pairing request.
+    pub fn provide_passkey(&self, code: u32) {
+        if let Some(tx) = self.passkey_slot.lock().unwrap().take() {
+            let _ = tx.send(code);
+        }
+    }
+
+    /// Cancel an in-flight passkey request (user dismissed the dialog).
+    pub fn cancel_passkey(&self) {
+        // Dropping the sender makes the agent answer Canceled to BlueZ.
+        let _ = self.passkey_slot.lock().unwrap().take();
     }
 }
 
@@ -279,12 +302,17 @@ impl BleHandle {
 pub fn spawn(rt: &tokio::runtime::Runtime) -> (BleHandle, mpsc::Receiver<BleEvent>) {
     let (event_tx, event_rx) = mpsc::channel(64);
     let (cmd_tx, cmd_rx) = mpsc::channel(32);
-    rt.spawn(ble_task(event_tx, cmd_rx));
-    (BleHandle { cmd_tx }, event_rx)
+    let passkey_slot = PasskeySlot::default();
+    rt.spawn(ble_task(event_tx, cmd_rx, passkey_slot.clone()));
+    (BleHandle { cmd_tx, passkey_slot }, event_rx)
 }
 
 /// Main BLE task — runs on tokio, manages state machine.
-async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>) {
+async fn ble_task(
+    tx: mpsc::Sender<BleEvent>,
+    mut rx: mpsc::Receiver<BleCommand>,
+    passkey_slot: PasskeySlot,
+) {
     log::info!("BLE task started");
 
     let session = match bluer::Session::new().await {
@@ -329,10 +357,27 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
         }
     };
 
+    // KeyboardDisplay pairing agent: InfiniTime shows a 6-digit code, the user
+    // types it into the app. Without this the system agent negotiates Just-Works
+    // (NoInputNoOutput), whose bonds reconnect unreliably on InfiniTime.
+    let _agent = match session
+        .register_agent(make_agent(passkey_slot, tx.clone()))
+        .await
+    {
+        Ok(h) => Some(h),
+        Err(e) => {
+            log::warn!("Could not register pairing agent: {e} — relying on system agent");
+            None
+        }
+    };
+
     let mut auto_addr: Option<Address> = None;
     let mut attempts: u32 = 0;
     let mut user_disconnected = false;
     let mut needs_rescan = false;
+    // Set when a pairing attempt failed/was cancelled — suppresses re-prompting
+    // on every auto-reconnect until the user explicitly connects again.
+    let mut pairing_failed = false;
 
     loop {
         // If we should auto-reconnect, do so after backoff
@@ -376,6 +421,7 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                                 attempts = 0;
                                 needs_rescan = false;
                                 user_disconnected = false;
+                                pairing_failed = false;
                                 continue;
                             }
                             _ => {}
@@ -404,7 +450,7 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
             let _ = tx.send(BleEvent::Reconnecting { attempt: attempts + 1, delay_secs: 0 }).await;
 
             // Attempt connection
-            match do_connect(&adapter, addr, &tx, &mut rx).await {
+            match do_connect(&adapter, addr, &tx, &mut rx, !pairing_failed).await {
                 Ok(DisconnectReason::UserRequested) => {
                     log::info!("Disconnected by user request");
                     auto_addr = None;
@@ -420,9 +466,14 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                     auto_addr = Some(new_addr);
                     attempts = 0;
                     user_disconnected = false;
+                    pairing_failed = false;
                 }
                 Err(e) => {
                     log::warn!("Connection attempt {} failed: {e}", attempts + 1);
+                    if e.to_string().contains("pairing failed") {
+                        log::info!("Pairing failed/cancelled — reconnects won't re-prompt until a manual connect");
+                        pairing_failed = true;
+                    }
                     if e.to_string().contains("not present or removed") {
                         needs_rescan = true;
                     }
@@ -456,6 +507,7 @@ async fn ble_task(tx: mpsc::Sender<BleEvent>, mut rx: mpsc::Receiver<BleCommand>
                 attempts = 0;
                 needs_rescan = false;
                 user_disconnected = false;
+                pairing_failed = false;
             }
             Some(BleCommand::Shutdown) => {
                 log::info!("BLE task received shutdown");
@@ -528,11 +580,22 @@ async fn do_connect(
     addr: Address,
     tx: &mpsc::Sender<BleEvent>,
     rx: &mut mpsc::Receiver<BleCommand>,
+    pair: bool,
 ) -> Result<DisconnectReason> {
     let device = adapter.device(addr)?;
 
     // Subscribe to adapter events early so we detect BT being turned off.
     let mut adapter_events = adapter.events().await?;
+
+    // InfiniTime needs a bonded (encrypted) link to reconnect reliably; an
+    // unbonded GATT connection drops out. Pair first if we have no bond —
+    // this drives the passkey prompt via our agent.
+    if pair && !device.is_paired().await.unwrap_or(false) {
+        log::info!("Not bonded to {addr} — starting secure pairing");
+        device.pair().await.context("pairing failed")?;
+        let _ = device.set_trusted(true).await;
+        log::info!("Bonded with {addr}");
+    }
 
     log::info!("Initiating connection to {addr} (timeout {}s)", CONNECT_TIMEOUT_SECS);
 
@@ -877,6 +940,43 @@ async fn discover_characteristics(
         return Err(anyhow!("No characteristics found"));
     }
     Ok(map)
+}
+
+/// Build a `KeyboardDisplay` pairing agent: `request_passkey` asks the UI for
+/// the code the watch displays; `request_confirmation` auto-accepts the
+/// numeric-comparison fallback. InfiniTime's secure pairing needs this — a
+/// Just-Works bond (NoInputNoOutput) reconnects unreliably.
+fn make_agent(passkey_slot: PasskeySlot, tx: mpsc::Sender<BleEvent>) -> Agent {
+    Agent {
+        request_default: true,
+        request_passkey: Some(Box::new(move |req: RequestPasskey| {
+            let passkey_slot = passkey_slot.clone();
+            let tx = tx.clone();
+            Box::pin(async move {
+                log::info!(
+                    "Watch {} is displaying a pairing code — awaiting entry from UI",
+                    req.device
+                );
+                let (code_tx, code_rx) = oneshot::channel();
+                *passkey_slot.lock().unwrap() = Some(code_tx);
+                if tx.send(BleEvent::PasskeyRequested).await.is_err() {
+                    return Err(ReqError::Canceled);
+                }
+                code_rx.await.map_err(|_| ReqError::Canceled)
+            })
+        })),
+        request_confirmation: Some(Box::new(|req: RequestConfirmation| {
+            Box::pin(async move {
+                log::info!(
+                    "Auto-confirming pairing code {} for {}",
+                    req.passkey,
+                    req.device
+                );
+                Ok(())
+            })
+        })),
+        ..Default::default()
+    }
 }
 
 fn build_alert_message(category: u8, title: &str, body: &str) -> Vec<u8> {
