@@ -28,16 +28,20 @@
           </object>
         </child>
         <property name="content">
-          <object class="AdwNavigationView" id="navigation_view">
-            <child>
-              <object class="AdwNavigationPage" id="devices_nav_page">
-                <property name="title" translatable="yes">Devices</property>
-                <property name="tag">devices</property>
-                <property name="child">
-                  <object class="PinepalDevicesPage" id="devices_page"/>
-                </property>
+          <object class="AdwToastOverlay" id="toast_overlay">
+            <property name="child">
+              <object class="AdwNavigationView" id="navigation_view">
+                <child>
+                  <object class="AdwNavigationPage" id="devices_nav_page">
+                    <property name="title" translatable="yes">Devices</property>
+                    <property name="tag">devices</property>
+                    <property name="child">
+                      <object class="PinepalDevicesPage" id="devices_page"/>
+                    </property>
+                  </object>
+                </child>
               </object>
-            </child>
+            </property>
           </object>
         </property>
       </object>

@@ -46,6 +46,8 @@ mod imp {
         #[template_child]
         pub navigation_view: TemplateChild<adw::NavigationView>,
         #[template_child]
+        pub toast_overlay: TemplateChild<adw::ToastOverlay>,
+        #[template_child]
         pub devices_page: TemplateChild<PinepalDevicesPage>,
 
         pub dashboard_page: RefCell<Option<PinepalDashboardPage>>,
@@ -69,6 +71,7 @@ mod imp {
                 header_bar: Default::default(),
                 back_button: Default::default(),
                 navigation_view: Default::default(),
+                toast_overlay: Default::default(),
                 devices_page: Default::default(),
                 dashboard_page: RefCell::new(None),
                 ble_handle: RefCell::new(None),
@@ -290,10 +293,17 @@ impl PinepalWindow {
             }
             BleEvent::Disconnected { reason } => {
                 log::info!("Disconnected: {reason}");
+                if reason.starts_with("Pairing failed") {
+                    // The BLE manager stopped auto-reconnecting — go back to
+                    // discovery (starts a fresh scan) and tell the user.
+                    self.show_devices();
+                    imp.devices_page.set_ready();
+                    imp.toast_overlay
+                        .add_toast(adw::Toast::new(&gettext("Pairing failed or cancelled.")));
                 // Only start a new scan for user-initiated disconnects.  For an
                 // unexpected loss of connection the BLE manager's own reconnect
                 // loop is already running — sending StartScan here would cancel it.
-                if reason.starts_with("User") || reason.starts_with("Switching") {
+                } else if reason.starts_with("User") || reason.starts_with("Switching") {
                     self.show_devices();
                 } else {
                     self.show_devices_no_scan();

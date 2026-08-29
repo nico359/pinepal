@@ -408,9 +408,6 @@ async fn ble_task(
     let mut attempts: u32 = 0;
     let mut user_disconnected = false;
     let mut needs_rescan = false;
-    // Set when a pairing attempt failed/was cancelled — suppresses re-prompting
-    // on every auto-reconnect until the user explicitly connects again.
-    let mut pairing_failed = false;
 
     loop {
         // If we should auto-reconnect, do so after backoff
@@ -454,7 +451,6 @@ async fn ble_task(
                                 attempts = 0;
                                 needs_rescan = false;
                                 user_disconnected = false;
-                                pairing_failed = false;
                                 continue;
                             }
                             _ => {}
@@ -483,7 +479,7 @@ async fn ble_task(
             let _ = tx.send(BleEvent::Reconnecting { attempt: attempts + 1, delay_secs: 0 }).await;
 
             // Attempt connection
-            match do_connect(&adapter, addr, &tx, &mut rx, !pairing_failed, &call_action_tx).await {
+            match do_connect(&adapter, addr, &tx, &mut rx, &call_action_tx).await {
                 Ok(DisconnectReason::UserRequested) => {
                     log::info!("Disconnected by user request");
                     auto_addr = None;
@@ -499,13 +495,23 @@ async fn ble_task(
                     auto_addr = Some(new_addr);
                     attempts = 0;
                     user_disconnected = false;
-                    pairing_failed = false;
                 }
                 Err(e) => {
                     log::warn!("Connection attempt {} failed: {e}", attempts + 1);
                     if e.to_string().contains("pairing failed") {
-                        log::info!("Pairing failed/cancelled — reconnects won't re-prompt until a manual connect");
-                        pairing_failed = true;
+                        // Pairing failed or was cancelled — don't silently fall
+                        // through to an unbonded connection (unreliable on
+                        // InfiniTime, and looks like pairing succeeded). Stop
+                        // auto-reconnecting; the next explicit user Connect
+                        // prompts again.
+                        auto_addr = None;
+                        user_disconnected = true;
+                        attempts = 0;
+                        let _ = tx.send(BleEvent::Disconnected {
+                            reason: "Pairing failed or cancelled".into(),
+                        }).await;
+                    } else {
+                        attempts += 1;
                     }
                     if e.to_string().contains("not present or removed") {
                         needs_rescan = true;
@@ -540,7 +546,6 @@ async fn ble_task(
                 attempts = 0;
                 needs_rescan = false;
                 user_disconnected = false;
-                pairing_failed = false;
             }
             Some(BleCommand::Shutdown) => {
                 log::info!("BLE task received shutdown");
@@ -613,7 +618,6 @@ async fn do_connect(
     addr: Address,
     tx: &mpsc::Sender<BleEvent>,
     rx: &mut mpsc::Receiver<BleCommand>,
-    pair: bool,
     call_action_tx: &mpsc::Sender<CallAction>,
 ) -> Result<DisconnectReason> {
     let device = adapter.device(addr)?;
@@ -624,7 +628,7 @@ async fn do_connect(
     // InfiniTime needs a bonded (encrypted) link to reconnect reliably; an
     // unbonded GATT connection drops out. Pair first if we have no bond —
     // this drives the passkey prompt via our agent.
-    if pair && !device.is_paired().await.unwrap_or(false) {
+    if !device.is_paired().await.unwrap_or(false) {
         log::info!("Not bonded to {addr} — starting secure pairing");
         device.pair().await.context("pairing failed")?;
         let _ = device.set_trusted(true).await;
