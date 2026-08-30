@@ -779,11 +779,26 @@ async fn do_connect(
     // Monitor device for disconnect
     let mut prop_stream = device.events().await?;
 
+    // Poll the link directly too — BlueZ property-change events aren't always
+    // delivered, and missing a disconnect would wedge us "connected" (writes
+    // start failing with Not connected while the dashboard looks fine).
+    let mut health = tokio::time::interval(Duration::from_secs(3));
+    health.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     log::info!("Connected and streaming data from {addr}");
 
     // Connected event loop
     loop {
         tokio::select! {
+            _ = health.tick() => {
+                if !device.is_connected().await.unwrap_or(false) {
+                    log::warn!("Device {addr} no longer connected (health poll)");
+                    let _ = tx.send(BleEvent::Disconnected {
+                        reason: "Watch disconnected".into(),
+                    }).await;
+                    return Err(anyhow!("Device disconnected"));
+                }
+            }
             val = next_or_pending(&mut battery_stream) => {
                 if let Some(&v) = val.first() {
                     log::debug!("Battery update: {v}%");
