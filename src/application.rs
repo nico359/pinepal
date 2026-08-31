@@ -277,8 +277,8 @@ impl PinepalApplication {
             .application_icon("io.github.nico359.pinepal")
             .developer_name("nico359")
             .version(VERSION)
-            .developers(vec!["nico359", "GitHub Copilot CLI (Claude, Deepseek)"])
-            .comments("Companion app for PineTime smartwatches running InfiniTime.\n\nBuilt with the assistance of AI (GitHub Copilot CLI, powered by Claude and Deepseek).")
+            .developers(vec!["nico359", "GitHub Copilot CLI (Claude, DeepSeek, Kimi)"])
+            .comments("Companion app for PineTime smartwatches running InfiniTime.\n\nBuilt with the assistance of AI (Mostly Claude, DeepSeek and Kimi inside GitHub Copilot CLI).")
             .website("https://github.com/nico359/pinepal")
             .issue_url("https://github.com/nico359/pinepal/issues")
             .license_type(gtk::License::Gpl30)
@@ -288,7 +288,8 @@ impl PinepalApplication {
 
         about.add_credit_section(
             Some(&gettext("Based on")),
-            &["Watchmate by Andrii Zymohliad https://github.com/azymohliad/watchmate"],
+            &["Watchmate by Andrii Zymohliad https://github.com/azymohliad/watchmate",
+            "Pinetime-Furios by Jeffrey Clemmons https://github.com/jlclemmons/pinetime-furios"],
         );
 
         about.present(Some(&window));
