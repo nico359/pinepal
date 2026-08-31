@@ -20,6 +20,12 @@
   <url type="vcs-browser">https://github.com/nico359/pinepal</url>
   <url type="bugtracker">https://github.com/nico359/pinepal/issues</url>
 
+  <recommends>
+    <display_length compare="ge">360</display_length>
+    <control>touch</control>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </recommends>
   <supports>
     <control>touch</control>
     <control>keyboard</control>
@@ -50,6 +56,15 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="0.6.0" date="2026-08-31">
+      <description translate="no">
+        <p>Secure pairing and calls</p>
+        <ul>
+          <li>Watch is now securely paired with a code - that means you will have to enter the code shown on your watch after updating the app</li>
+          <li>Phone calls are now shown and can be accpeted or declined from the watch - currently only works with oFono</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-07-11">
       <description translate="no">
         <p>Weather and firmware updates</p>
