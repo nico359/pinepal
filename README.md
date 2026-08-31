@@ -1,23 +1,24 @@
 # PinePal
 
-Companion app for [PineTime](https://www.pine64.org/pinetime/) smartwatches running [InfiniTime](https://github.com/InfiniTimeOrg/InfiniTime). Built with GTK4/libadwaita and Rust, aimed at mobile Linux devices such as the PinePhone.
+Companion app for [PineTime](https://www.pine64.org/pinetime/) smartwatches running [InfiniTime](https://github.com/InfiniTimeOrg/InfiniTime). Built with GTK4/libadwaita and Rust, aimed at mobile Linux devices such as the PinePhone or Furiphone.
 
 ## Features
 
-- BLE connection with automatic reconnection and exponential backoff
+- Secure BLE connection with automatic reconnection and exponential backoff
 - Live battery, heart rate, and step count display
 - Step history chart with daily persistence (7d / 30d / all time)
-- Desktop notification forwarding to watch
+- Desktop notification and phone call forwarding to the watch
 - Music/Media controls
+- Pushing weather data to the watch
+- Firmware can be directly fetched and updated within the app
 - Background mode (keeps connection alive when window is closed)
 - Said background mode can also be started manually by running flatpak run io.github.nico359.pinepal --gapplication-service
-- Autostart via Background Portal - might not work in e.g. Phosh because the Portal is not implemented there yet)
+- Autostart via Background Portal - might not work in e.g. Phosh because the Portal is not implemented there yet
 
 ## To be improved
 
-- Firmware Update of the watch
 - Maybe also heart rate history with the new feature of InfiniTime 1.16
-- Accepting or declining calls (if that is even possible)
+- Accepting or declining calls via ModemManager for non Halium devices
 - Maybe support for other watches
 
 ## Screenshots
@@ -31,11 +32,12 @@ Companion app for [PineTime](https://www.pine64.org/pinetime/) smartwatches runn
 
 ## Credits
 
-Based on the work of [Watchmate](https://github.com/azymohliad/watchmate) by Andrii Zymohliad.
+Based on the work of [Watchmate](https://github.com/azymohliad/watchmate) by Andrii Zymohliad.  
+Also took some stuff from [Pinetime-Furios](https://github.com/jlclemmons/pinetime-furios) by Jeffrey Clemmons - mostly weather, secure pairing and phone calls.
 
 ## AI Disclosure
 
-This application was built with the assistance of AI (GitHub Copilot CLI, Claude, DeepSeek).
+This application was built with the assistance of AI (GitHub Copilot CLI, Claude, DeepSeek, Kimi).
 
 ## Building
 
